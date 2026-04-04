@@ -24,6 +24,8 @@ packages:
   - x11-xserver-utils
   # Browser
   - chromium-browser
+  # Snap (for Telegram Desktop)
+  - snapd
   # Dev tools
   - git
   - curl
@@ -196,10 +198,63 @@ write_files:
       mkdir -p /home/azureuser/workspace
       chown azureuser:azureuser /home/azureuser/workspace
 
-      # Configure xrdp to use XFCE
+      # Install Telegram Desktop
+      echo "Installing Telegram Desktop..."
+      snap install telegram-desktop || true
+
+      # Tune xrdp for better performance
       echo "Configuring xrdp..."
+      sed -i 's/^max_bpp=.*/max_bpp=24/' /etc/xrdp/xrdp.ini
+      sed -i 's/^xserverbpp=.*/xserverbpp=24/' /etc/xrdp/xrdp.ini
+      grep -q 'bulk_compression' /etc/xrdp/xrdp.ini || sed -i '/\[Globals\]/a bulk_compression=true' /etc/xrdp/xrdp.ini
       systemctl enable xrdp
       systemctl restart xrdp
+
+      # Disable XFCE compositing (reduces lag over RDP)
+      su - azureuser -c "DISPLAY=:99 xfconf-query -c xfwm4 -p /general/use_compositing -s false" 2>/dev/null || true
+
+      # Create desktop shortcuts
+      echo "Creating desktop shortcuts..."
+      mkdir -p /home/azureuser/Desktop
+
+      cat > /home/azureuser/Desktop/Chromium.desktop << 'DESK'
+      [Desktop Entry]
+      Type=Application
+      Name=Chromium
+      Exec=chromium-browser
+      Icon=chromium-browser
+      Terminal=false
+      DESK
+
+      cat > /home/azureuser/Desktop/Telegram.desktop << 'DESK'
+      [Desktop Entry]
+      Type=Application
+      Name=Telegram
+      Exec=telegram-desktop
+      Icon=telegram
+      Terminal=false
+      DESK
+
+      cat > /home/azureuser/Desktop/OpenClaw.desktop << 'DESK'
+      [Desktop Entry]
+      Type=Application
+      Name=OpenClaw Chat
+      Exec=xfce4-terminal -e 'bash -c "openclaw chat; exec bash"'
+      Icon=utilities-terminal
+      Terminal=false
+      DESK
+
+      cat > /home/azureuser/Desktop/OpenClaw-Logs.desktop << 'DESK'
+      [Desktop Entry]
+      Type=Application
+      Name=OpenClaw Logs
+      Exec=xfce4-terminal -e 'bash -c "sudo journalctl -u openclaw-gateway -f; exec bash"'
+      Icon=utilities-log-viewer
+      Terminal=false
+      DESK
+
+      chmod +x /home/azureuser/Desktop/*.desktop
+      chown -R azureuser:azureuser /home/azureuser/Desktop
 
       # Enable and start services
       echo "Starting services..."
