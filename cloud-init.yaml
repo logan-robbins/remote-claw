@@ -1,0 +1,215 @@
+#cloud-config
+
+# OpenClaw VM Bootstrap - Ubuntu 24.04 LTS + XFCE + OpenClaw
+# Uses default Azure admin user (azureuser). No custom users.
+
+ssh_pwauth: true
+
+package_update: true
+package_upgrade: true
+
+packages:
+  # Desktop environment (XFCE on X11)
+  - xfce4
+  - xfce4-goodies
+  - xfce4-terminal
+  - dbus-x11
+  # Remote desktop
+  - xrdp
+  # Virtual display + desktop automation
+  - xvfb
+  - xdotool
+  - scrot
+  - x11-utils
+  - x11-xserver-utils
+  # Browser
+  - chromium-browser
+  # Dev tools
+  - git
+  - curl
+  - wget
+  - build-essential
+  - unzip
+  - jq
+  # Python
+  - python3
+  - python3-venv
+  - python3-pip
+  - python3-dev
+  # System libraries for GUI automation
+  - libx11-dev
+  - libxext-dev
+  - libxtst-dev
+  - libpng-dev
+
+write_files:
+  # xrdp session config - use XFCE
+  - path: /etc/xrdp/startwm.sh
+    permissions: "0755"
+    content: |
+      #!/bin/sh
+      unset DBUS_SESSION_BUS_ADDRESS
+      unset XDG_RUNTIME_DIR
+      exec startxfce4
+
+  # Xvfb virtual display service
+  - path: /etc/systemd/system/xvfb.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Xvfb Virtual Framebuffer
+      After=network.target
+
+      [Service]
+      Type=simple
+      ExecStart=/usr/bin/Xvfb :99 -screen 0 1920x1080x24 -ac +extension GLX +render -noreset
+      Restart=always
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
+
+  # OpenClaw gateway service
+  - path: /etc/systemd/system/openclaw-gateway.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=OpenClaw Gateway
+      After=network-online.target xvfb.service
+      Wants=network-online.target xvfb.service
+
+      [Service]
+      Type=simple
+      User=azureuser
+      Group=azureuser
+      WorkingDirectory=/home/azureuser
+      Environment=DISPLAY=:99
+      Environment=HOME=/home/azureuser
+      EnvironmentFile=/home/azureuser/.openclaw/.env
+      ExecStart=/usr/bin/openclaw gateway
+      Restart=always
+      RestartSec=10
+      StandardOutput=journal
+      StandardError=journal
+
+      [Install]
+      WantedBy=multi-user.target
+
+  # OpenClaw environment file (tokens injected by deploy.sh)
+  - path: /home/azureuser/.openclaw/.env
+    permissions: "0600"
+    content: |
+      XAI_API_KEY=__XAI_API_KEY__
+      TELEGRAM_BOT_TOKEN=__TELEGRAM_BOT_TOKEN__
+      OPENCLAW_GATEWAY_TOKEN=__GATEWAY_TOKEN__
+
+  # OpenClaw configuration (validated against 2026.4.x schema - no "tools" key)
+  - path: /home/azureuser/.openclaw/openclaw.json
+    permissions: "0644"
+    content: |
+      {
+        "agents": {
+          "defaults": {
+            "model": {
+              "primary": "xai/grok-4"
+            },
+            "workspace": "/home/azureuser/workspace",
+            "maxConcurrent": 4
+          },
+          "list": [
+            {
+              "id": "main",
+              "default": true
+            }
+          ]
+        },
+        "models": {
+          "mode": "merge",
+          "providers": {
+            "xai": {
+              "baseUrl": "https://api.x.ai/v1",
+              "api": "openai-completions",
+              "models": [
+                {
+                  "id": "grok-4",
+                  "name": "Grok 4",
+                  "reasoning": false,
+                  "input": ["text"],
+                  "contextWindow": 200000,
+                  "maxTokens": 8192
+                }
+              ]
+            }
+          }
+        },
+        "channels": {
+          "telegram": {
+            "enabled": true,
+            "dmPolicy": "pairing",
+            "groupPolicy": "disabled",
+            "streaming": "partial"
+          }
+        },
+        "gateway": {
+          "port": 18789,
+          "mode": "local"
+        },
+        "logging": {
+          "redactSensitive": "tools"
+        }
+      }
+
+  # Setup script that runs after packages are installed
+  - path: /opt/setup-openclaw.sh
+    permissions: "0755"
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+      exec > /var/log/openclaw-setup.log 2>&1
+
+      echo "=== OpenClaw Setup Starting ==="
+
+      # Set RDP password for azureuser
+      echo "azureuser:__RDP_PASSWORD__" | chpasswd
+
+      # Install Node.js 22 via NodeSource
+      echo "Installing Node.js 22..."
+      curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+      apt-get install -y nodejs
+
+      # Install OpenClaw globally
+      echo "Installing OpenClaw..."
+      npm install -g openclaw@latest
+
+      # Install pyautogui via pip (not available as apt package on 24.04)
+      echo "Installing pyautogui..."
+      pip3 install --break-system-packages pyautogui
+
+      # Fix home directory ownership (npm install as root taints .npm cache)
+      chown -R azureuser:azureuser /home/azureuser
+
+      # Install Playwright + Chromium for browser automation (as azureuser)
+      echo "Installing Playwright..."
+      su - azureuser -c "npx playwright install chromium --with-deps" || true
+
+      # Create workspace directory
+      mkdir -p /home/azureuser/workspace
+      chown azureuser:azureuser /home/azureuser/workspace
+
+      # Configure xrdp to use XFCE
+      echo "Configuring xrdp..."
+      systemctl enable xrdp
+      systemctl restart xrdp
+
+      # Enable and start services
+      echo "Starting services..."
+      systemctl daemon-reload
+      systemctl enable xvfb.service
+      systemctl start xvfb.service
+      systemctl enable openclaw-gateway.service
+      systemctl start openclaw-gateway.service
+
+      echo "=== OpenClaw Setup Complete ==="
+
+runcmd:
+  - bash /opt/setup-openclaw.sh
