@@ -1,0 +1,428 @@
+#cloud-config
+
+# OpenClaw Bake Image - Full software install
+# -----------------------------------------------------------------------------
+# This cloud-init runs ONCE during 'deploy.sh --bake' on a stock Ubuntu VM.
+# It installs everything needed for OpenClaw to run, then the VM is captured
+# as a specialized image in the Azure Compute Gallery.
+#
+# Contains NO secrets (xAI, Telegram) and NO per-claw configuration.
+# Runtime cloud-init (cloud-init.yaml) handles those on each deploy.
+# -----------------------------------------------------------------------------
+
+ssh_pwauth: true
+
+package_update: true
+package_upgrade: true
+
+packages:
+  # Desktop environment (XFCE on X11)
+  - xfce4
+  - xfce4-goodies
+  - xfce4-terminal
+  - dbus-x11
+  # Remote desktop
+  - xrdp
+  # Virtual display + desktop automation
+  - xvfb
+  - x11vnc
+  - tigervnc-viewer
+  - xdotool
+  - scrot
+  - x11-utils
+  - x11-xserver-utils
+  # Dev tools
+  - git
+  - curl
+  - wget
+  - build-essential
+  - unzip
+  - jq
+  # Python
+  - python3
+  - python3-venv
+  - python3-pip
+  - python3-dev
+  # System libraries for GUI automation
+  - libx11-dev
+  - libxext-dev
+  - libxtst-dev
+  - libpng-dev
+
+write_files:
+  # xrdp session config - use XFCE
+  - path: /etc/xrdp/startwm.sh
+    permissions: "0755"
+    content: |
+      #!/bin/sh
+      unset DBUS_SESSION_BUS_ADDRESS
+      unset XDG_RUNTIME_DIR
+      exec startxfce4
+
+  # Xvfb virtual display service (Chrome's permanent home)
+  - path: /etc/systemd/system/xvfb.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Xvfb Virtual Framebuffer
+      After=network.target
+
+      [Service]
+      Type=simple
+      ExecStart=/usr/bin/Xvfb :99 -screen 0 1920x1080x24 -ac +extension GLX +render -noreset
+      Restart=always
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
+
+  # x11vnc mirrors Xvfb :99 so you can watch the agent's browser from RDP
+  - path: /etc/systemd/system/x11vnc-xvfb.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=x11vnc mirror of Xvfb :99
+      After=xvfb.service
+      Requires=xvfb.service
+
+      [Service]
+      Type=simple
+      ExecStart=/usr/bin/x11vnc -display :99 -rfbport 5999 -nopw -shared -forever -noxdamage -localhost
+      Restart=always
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
+
+  # OpenClaw gateway service
+  # Always uses Xvfb :99 so Chrome never crashes when RDP disconnects.
+  - path: /etc/systemd/system/openclaw-gateway.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=OpenClaw Gateway
+      After=network-online.target xvfb.service
+      Wants=network-online.target xvfb.service
+
+      [Service]
+      Type=simple
+      User=azureuser
+      Group=azureuser
+      WorkingDirectory=/home/azureuser
+      Environment=HOME=/home/azureuser
+      Environment=DISPLAY=:99
+      EnvironmentFile=/home/azureuser/.openclaw/.env
+      ExecStart=/usr/bin/openclaw gateway
+      Restart=always
+      RestartSec=10
+      StandardOutput=journal
+      StandardError=journal
+
+      [Install]
+      WantedBy=multi-user.target
+
+  # iptables restore service (blocks IMDS across reboots)
+  - path: /etc/systemd/system/iptables-restore.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Restore iptables rules
+      Before=network-pre.target
+      Wants=network-pre.target
+
+      [Service]
+      Type=oneshot
+      ExecStart=/sbin/iptables-restore /etc/iptables/rules.v4
+      RemainAfterExit=yes
+
+      [Install]
+      WantedBy=multi-user.target
+
+  # Runtime first-boot script (called by runtime cloud-init.yaml)
+  # Mounts the data disk, seeds config from templates, starts services.
+  - path: /opt/first-boot.sh
+    permissions: "0755"
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+      exec > /var/log/openclaw-first-boot.log 2>&1
+
+      echo "=== OpenClaw first-boot (runtime) starting ==="
+
+      # ---------------------------------------------------------------
+      # Mount the data disk (Azure attaches at LUN 0)
+      # ---------------------------------------------------------------
+      DATA_DEV="/dev/disk/azure/scsi1/lun0"
+      DATA_MOUNT="/data"
+      mkdir -p "$DATA_MOUNT"
+
+      if ! blkid "$DATA_DEV" &>/dev/null; then
+          echo "Fresh data disk detected. Formatting ext4..."
+          mkfs.ext4 -F "$DATA_DEV"
+      else
+          echo "Existing data disk detected. Preserving data."
+      fi
+
+      # Mount if not already mounted
+      if ! mountpoint -q "$DATA_MOUNT"; then
+          mount "$DATA_DEV" "$DATA_MOUNT"
+      fi
+
+      # Persist mount across reboots
+      if ! grep -q "$DATA_MOUNT" /etc/fstab; then
+          echo "$DATA_DEV $DATA_MOUNT ext4 defaults,nofail 0 2" >> /etc/fstab
+      fi
+
+      # ---------------------------------------------------------------
+      # Initialize /data/openclaw and /data/workspace (first boot only)
+      # ---------------------------------------------------------------
+      mkdir -p "$DATA_MOUNT/openclaw" "$DATA_MOUNT/workspace"
+
+      # Seed .env from template if missing
+      if [[ ! -f "$DATA_MOUNT/openclaw/.env" ]] && [[ -f /etc/openclaw-runtime/env.template ]]; then
+          cp /etc/openclaw-runtime/env.template "$DATA_MOUNT/openclaw/.env"
+          chmod 600 "$DATA_MOUNT/openclaw/.env"
+          echo "Seeded .env from template."
+      fi
+
+      # Seed openclaw.json from template if missing
+      if [[ ! -f "$DATA_MOUNT/openclaw/openclaw.json" ]] && [[ -f /etc/openclaw-runtime/openclaw.json.template ]]; then
+          cp /etc/openclaw-runtime/openclaw.json.template "$DATA_MOUNT/openclaw/openclaw.json"
+          chmod 644 "$DATA_MOUNT/openclaw/openclaw.json"
+          echo "Seeded openclaw.json from template."
+      fi
+
+      # Seed exec-approvals.json from template if missing
+      if [[ ! -f "$DATA_MOUNT/openclaw/exec-approvals.json" ]] && [[ -f /etc/openclaw-runtime/exec-approvals.json.template ]]; then
+          cp /etc/openclaw-runtime/exec-approvals.json.template "$DATA_MOUNT/openclaw/exec-approvals.json"
+          chmod 644 "$DATA_MOUNT/openclaw/exec-approvals.json"
+      fi
+
+      chown -R azureuser:azureuser "$DATA_MOUNT"
+
+      # ---------------------------------------------------------------
+      # Symlink /data/openclaw -> ~/.openclaw and /data/workspace -> ~/workspace
+      # ---------------------------------------------------------------
+      # Remove any existing entries first (idempotent)
+      rm -rf /home/azureuser/.openclaw /home/azureuser/workspace 2>/dev/null || true
+      ln -s "$DATA_MOUNT/openclaw" /home/azureuser/.openclaw
+      ln -s "$DATA_MOUNT/workspace" /home/azureuser/workspace
+      chown -h azureuser:azureuser /home/azureuser/.openclaw /home/azureuser/workspace
+
+      # ---------------------------------------------------------------
+      # Start services (already enabled in the image, just start them)
+      # ---------------------------------------------------------------
+      systemctl daemon-reload
+      systemctl restart xvfb.service
+      systemctl restart x11vnc-xvfb.service
+      systemctl restart openclaw-gateway.service
+
+      # ---------------------------------------------------------------
+      # Post-start: run doctor, remove stray gateway.auth, set approvals
+      # ---------------------------------------------------------------
+      sleep 5
+      su - azureuser -c "openclaw doctor --fix" 2>/dev/null || true
+      su - azureuser -c "openclaw config unset gateway.auth" 2>/dev/null || true
+      su - azureuser -c 'openclaw approvals allowlist add --agent "*" "**"' 2>/dev/null || true
+      su - azureuser -c 'openclaw approvals allowlist add --agent "main" "**"' 2>/dev/null || true
+
+      echo "=== First-boot complete ==="
+      echo "Data: /data/openclaw -> ~/.openclaw"
+      echo "      /data/workspace -> ~/workspace"
+
+  # Bake-time install script (runs once during bake, not on deploys)
+  - path: /opt/bake-install.sh
+    permissions: "0755"
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+      exec > /var/log/openclaw-bake.log 2>&1
+
+      echo "=== OpenClaw bake install starting ==="
+
+      # ---------------------------------------------------------------
+      # Disable AppArmor entirely (agent must have full system control)
+      # ---------------------------------------------------------------
+      echo "Disabling AppArmor..."
+      systemctl stop apparmor 2>/dev/null || true
+      systemctl disable apparmor 2>/dev/null || true
+      systemctl mask apparmor 2>/dev/null || true
+      apt-get remove --purge -y apparmor apparmor-utils 2>/dev/null || true
+      if ! grep -q 'apparmor=0' /etc/default/grub; then
+          sed -i 's|GRUB_CMDLINE_LINUX_DEFAULT="\(.*\)"|GRUB_CMDLINE_LINUX_DEFAULT="\1 apparmor=0 security="|' /etc/default/grub
+          update-grub 2>&1 | tail -3
+      fi
+
+      # ---------------------------------------------------------------
+      # Block Azure IMDS via iptables (agent can't reach Azure control plane)
+      # ---------------------------------------------------------------
+      echo "Blocking Azure IMDS..."
+      iptables -A OUTPUT -d 169.254.169.254 -j DROP
+      mkdir -p /etc/iptables
+      iptables-save > /etc/iptables/rules.v4
+      systemctl enable iptables-restore.service
+
+      # ---------------------------------------------------------------
+      # Node.js 24 (OpenClaw recommended)
+      # ---------------------------------------------------------------
+      echo "Installing Node.js 24..."
+      curl -fsSL https://deb.nodesource.com/setup_24.x | bash -
+      apt-get install -y nodejs
+
+      # ---------------------------------------------------------------
+      # OpenClaw CLI (global)
+      # ---------------------------------------------------------------
+      echo "Installing OpenClaw..."
+      npm install -g openclaw@latest
+
+      # ---------------------------------------------------------------
+      # Python packages for GUI automation
+      # ---------------------------------------------------------------
+      echo "Installing pyautogui..."
+      pip3 install --break-system-packages pyautogui
+
+      # Fix home dir ownership (npm install as root taints .npm cache)
+      chown -R azureuser:azureuser /home/azureuser/.npm /home/azureuser/.cache 2>/dev/null || true
+      chown -R azureuser:azureuser /home/azureuser
+
+      # ---------------------------------------------------------------
+      # Playwright + Chromium (for OpenClaw's browser automation)
+      # ---------------------------------------------------------------
+      echo "Installing Playwright..."
+      su - azureuser -c "npx playwright install chromium --with-deps" || true
+
+      # ---------------------------------------------------------------
+      # Google Chrome (.deb - snap chromium has AppArmor/DBus issues over xrdp)
+      # ---------------------------------------------------------------
+      echo "Installing Google Chrome..."
+      wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb -O /tmp/chrome.deb
+      apt-get install -y /tmp/chrome.deb
+      rm /tmp/chrome.deb
+
+      # ---------------------------------------------------------------
+      # Telegram Desktop (official tarball - snap has same xrdp issues)
+      # ---------------------------------------------------------------
+      echo "Installing Telegram Desktop..."
+      wget -q https://telegram.org/dl/desktop/linux -O /tmp/telegram.tar.xz
+      mkdir -p /opt
+      tar -xJf /tmp/telegram.tar.xz -C /opt/
+      rm /tmp/telegram.tar.xz
+      ln -sf /opt/Telegram/Telegram /usr/local/bin/telegram-desktop
+
+      # ---------------------------------------------------------------
+      # Configure xrdp
+      # ---------------------------------------------------------------
+      echo "Configuring xrdp..."
+      sed -i 's/^max_bpp=.*/max_bpp=24/' /etc/xrdp/xrdp.ini
+      sed -i 's/^xserverbpp=.*/xserverbpp=24/' /etc/xrdp/xrdp.ini
+      grep -q 'bulk_compression' /etc/xrdp/xrdp.ini || sed -i '/\[Globals\]/a bulk_compression=true' /etc/xrdp/xrdp.ini
+
+      # Session persistence: don't kill sessions when RDP disconnects
+      sed -i 's/^KillDisconnected=.*/KillDisconnected=false/' /etc/xrdp/sesman.ini 2>/dev/null || true
+      sed -i 's/^DisconnectedTimeLimit=.*/DisconnectedTimeLimit=0/' /etc/xrdp/sesman.ini 2>/dev/null || true
+      sed -i 's/^IdleTimeLimit=.*/IdleTimeLimit=0/' /etc/xrdp/sesman.ini 2>/dev/null || true
+
+      if ! grep -q 'KillDisconnected' /etc/xrdp/sesman.ini; then
+          sed -i '/\[Sessions\]/a KillDisconnected=false\nDisconnectedTimeLimit=0\nIdleTimeLimit=0' /etc/xrdp/sesman.ini
+      fi
+
+      # ---------------------------------------------------------------
+      # Desktop shortcuts (in /home/azureuser/Desktop/)
+      # ---------------------------------------------------------------
+      echo "Creating desktop shortcuts..."
+      mkdir -p /home/azureuser/Desktop
+
+      cat > /home/azureuser/Desktop/Chrome.desktop << 'DESK'
+      [Desktop Entry]
+      Type=Application
+      Name=Google Chrome
+      Exec=google-chrome %U
+      Icon=google-chrome
+      Terminal=false
+      Categories=Network;WebBrowser;
+      StartupNotify=true
+      DESK
+
+      cat > /home/azureuser/Desktop/Telegram.desktop << 'DESK'
+      [Desktop Entry]
+      Type=Application
+      Name=Telegram
+      Exec=/opt/Telegram/Telegram %U
+      Icon=telegram
+      Terminal=false
+      Categories=Network;Chat;
+      StartupNotify=true
+      DESK
+
+      cat > /home/azureuser/Desktop/OpenClaw-Dashboard.desktop << 'DESK'
+      [Desktop Entry]
+      Type=Application
+      Name=OpenClaw Dashboard
+      Exec=openclaw dashboard
+      Icon=utilities-terminal
+      Terminal=false
+      Categories=Network;
+      StartupNotify=true
+      DESK
+
+      cat > /home/azureuser/Desktop/Agent-Browser.desktop << 'DESK'
+      [Desktop Entry]
+      Type=Application
+      Name=Agent Browser Viewer
+      Comment=Watch the agent's Chrome browser (Xvfb :99 via VNC)
+      Exec=xfce4-terminal -e 'bash -c "echo Connecting to agent browser on :99...; vncviewer localhost:5999; exec bash"'
+      Icon=preferences-desktop-remote-desktop
+      Terminal=false
+      DESK
+
+      cat > /home/azureuser/Desktop/OpenClaw-Logs.desktop << 'DESK'
+      [Desktop Entry]
+      Type=Application
+      Name=OpenClaw Logs
+      Exec=xfce4-terminal -e 'bash -c "sudo journalctl -u openclaw-gateway -f; exec bash"'
+      Icon=utilities-log-viewer
+      Terminal=false
+      DESK
+
+      chmod +x /home/azureuser/Desktop/*.desktop
+      chown -R azureuser:azureuser /home/azureuser/Desktop
+
+      # Mark desktop files as trusted for XFCE
+      su - azureuser -c "
+          for f in ~/Desktop/*.desktop; do
+              gio set \"\$f\" metadata::trusted true 2>/dev/null || true
+              gio set \"\$f\" metadata::xfce-exe-checksum \"\$(sha256sum \"\$f\" | cut -d' ' -f1)\" 2>/dev/null || true
+          done
+      " || true
+
+      # Set Google Chrome as the default web browser
+      su - azureuser -c "
+          xdg-settings set default-web-browser google-chrome.desktop 2>/dev/null || true
+          xdg-mime default google-chrome.desktop x-scheme-handler/http 2>/dev/null || true
+          xdg-mime default google-chrome.desktop x-scheme-handler/https 2>/dev/null || true
+          xdg-mime default google-chrome.desktop text/html 2>/dev/null || true
+      " || true
+
+      # Disable XFCE compositing (smoother over RDP/VNC)
+      su - azureuser -c "DISPLAY=:99 xfconf-query -c xfwm4 -p /general/use_compositing -s false" 2>/dev/null || true
+
+      # ---------------------------------------------------------------
+      # Enable services (they start on first boot via runtime cloud-init)
+      # ---------------------------------------------------------------
+      systemctl daemon-reload
+      systemctl enable xrdp
+      systemctl enable xvfb.service
+      systemctl enable x11vnc-xvfb.service
+      systemctl enable openclaw-gateway.service
+      systemctl enable iptables-restore.service
+
+      # Clean up apt caches to shrink the image
+      apt-get autoremove -y
+      apt-get clean
+      rm -rf /var/lib/apt/lists/*
+
+      echo "=== OpenClaw bake install complete ==="
+      echo "Ready for capture as a specialized image."
+
+runcmd:
+  - bash /opt/bake-install.sh
