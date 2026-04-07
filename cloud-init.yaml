@@ -329,10 +329,12 @@ write_files:
       cat > /home/azureuser/Desktop/OpenClaw.desktop << 'DESK'
       [Desktop Entry]
       Type=Application
-      Name=OpenClaw Chat
-      Exec=xfce4-terminal -e 'bash -c "openclaw chat; exec bash"'
+      Name=OpenClaw Dashboard
+      Exec=openclaw dashboard
       Icon=utilities-terminal
       Terminal=false
+      Categories=Network;
+      StartupNotify=true
       DESK
 
       cat > /home/azureuser/Desktop/OpenClaw-Logs.desktop << 'DESK'
