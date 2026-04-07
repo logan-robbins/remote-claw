@@ -90,7 +90,7 @@ When it finishes it prints your RDP credentials. Open Microsoft Remote Desktop (
 
 ### Use Telegram
 
-Open Telegram on your phone and send any message to your bot. OpenClaw responds immediately — no pairing or approval. If you set `telegram-userid.txt`, only you can talk to it.
+Open Telegram on your phone and send any message to your bot. OpenClaw responds immediately — no pairing or approval step. By default the bot responds to anyone who messages it; if you set `telegram-userid.txt`, the bot is locked to your account only and silently ignores everyone else.
 
 ### Deploy a second claw
 
@@ -178,7 +178,7 @@ Normally claws use the latest version automatically. Use `--image` to pin to a s
 
 ### The image is shared
 
-All claws deploy from the same pre-baked image in an Azure Compute Gallery. The bake happens once and takes ~10 min (install packages, Node.js, OpenClaw, Chrome, Telegram Desktop, Playwright, disable AppArmor, block IMDS). After that, every deploy is ~2-3 min because it just attaches the image + injects secrets + starts services.
+All claws deploy from the same pre-baked image in an Azure Compute Gallery. The bake happens once and takes ~10 min (install packages, Node.js, OpenClaw, Chrome, Telegram Desktop, Playwright, disable AppArmor, block IMDS). After that, every deploy is ~2-3 min because the VM boots straight from the image; `deploy.sh` then SSHes in and runs a small init script that mounts the data disk, writes your secrets, and starts services.
 
 ### Image versioning
 
@@ -223,15 +223,15 @@ To **watch** the agent's browser from inside your RDP session, double-click **Ag
 
 ### Security model
 
-The agent has **full control inside the VM** — it can run any command, read any file, control the browser, and access the network. No sandboxing, no approval prompts.
+The agent has **full control inside the VM** — it can run any command, read any file, control the browser, and access the network. No sandboxing, no approval prompts. AppArmor is purged at bake time.
 
 The agent **cannot touch your Azure account**:
-- Azure IMDS (`169.254.169.254`) is blocked via iptables, so no process can acquire Azure tokens
-- No Azure CLI installed on the VM
+- Azure IMDS (`169.254.169.254`) is blocked via iptables (persisted across reboots), so no process can acquire Azure tokens
+- No Azure CLI is installed on the VM
 - No Azure credentials exist on the VM
 - The VM has no managed identity
 
-The Telegram bot can be locked to your user ID via `telegram-userid.txt`. The gateway dashboard is bound to localhost.
+The Telegram bot can be locked to your user ID via `telegram-userid.txt`. The gateway UI is bound to localhost (only reachable from inside the VM via RDP).
 
 ## Connect via RDP
 
