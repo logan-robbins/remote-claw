@@ -19,12 +19,12 @@ packages:
   - xrdp
   # Virtual display + desktop automation
   - xvfb
+  - x11vnc
+  - tigervnc-viewer
   - xdotool
   - scrot
   - x11-utils
   - x11-xserver-utils
-  # Snap (for Chromium and Telegram Desktop)
-  - snapd
   # Dev tools
   - git
   - curl
@@ -54,6 +54,7 @@ write_files:
       exec startxfce4
 
   # Xvfb virtual display service
+  # This is Chrome's permanent home. It never dies regardless of RDP state.
   - path: /etc/systemd/system/xvfb.service
     permissions: "0644"
     content: |
@@ -70,29 +71,30 @@ write_files:
       [Install]
       WantedBy=multi-user.target
 
-  # Wrapper script: auto-detect active xrdp display, fall back to Xvfb :99
-  # This lets the agent's browser appear in your RDP session if connected,
-  # or run headless on Xvfb when no one is connected.
-  - path: /usr/local/bin/openclaw-with-display.sh
-    permissions: "0755"
+  # x11vnc mirrors Xvfb :99 so you can watch the agent's browser from RDP.
+  # Open the "Agent Browser Viewer" shortcut on the desktop, or:
+  #   vncviewer localhost:5999
+  - path: /etc/systemd/system/x11vnc-xvfb.service
+    permissions: "0644"
     content: |
-      #!/bin/bash
-      # Auto-detect active xrdp display, fall back to Xvfb :99
-      ACTIVE_DISPLAY=':99'
-      for d in /tmp/.X11-unix/X*; do
-          n=$(basename "$d" | sed 's/X//')
-          if [[ "$n" != '99' ]]; then
-              if pgrep -u azureuser -f "Xorg :$n" > /dev/null 2>&1; then
-                  ACTIVE_DISPLAY=":$n"
-                  break
-              fi
-          fi
-      done
-      export DISPLAY="$ACTIVE_DISPLAY"
-      export XAUTHORITY=/home/azureuser/.Xauthority
-      exec /usr/bin/openclaw gateway
+      [Unit]
+      Description=x11vnc mirror of Xvfb :99
+      After=xvfb.service
+      Requires=xvfb.service
 
-  # OpenClaw gateway service (reads .env and config from /data via symlinks)
+      [Service]
+      Type=simple
+      ExecStart=/usr/bin/x11vnc -display :99 -rfbport 5999 -nopw -shared -forever -noxdamage -localhost
+      Restart=always
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
+
+  # OpenClaw gateway service
+  # Always uses Xvfb :99 so Chrome never crashes when RDP disconnects.
+  # Watch the agent's browser: open VNC viewer to localhost:5999 from your RDP session.
+  # Or ask via Telegram: the agent can take browser snapshots.
   - path: /etc/systemd/system/openclaw-gateway.service
     permissions: "0644"
     content: |
@@ -107,8 +109,9 @@ write_files:
       Group=azureuser
       WorkingDirectory=/home/azureuser
       Environment=HOME=/home/azureuser
+      Environment=DISPLAY=:99
       EnvironmentFile=/home/azureuser/.openclaw/.env
-      ExecStart=/usr/local/bin/openclaw-with-display.sh
+      ExecStart=/usr/bin/openclaw gateway
       Restart=always
       RestartSec=10
       StandardOutput=journal
@@ -138,11 +141,37 @@ write_files:
       systemctl disable apparmor 2>/dev/null || true
       systemctl mask apparmor 2>/dev/null || true
       apt-get remove --purge -y apparmor apparmor-utils 2>/dev/null || true
-      # Remove from kernel cmdline so it doesn't reload after reboot
       if ! grep -q 'apparmor=0' /etc/default/grub; then
           sed -i 's|GRUB_CMDLINE_LINUX_DEFAULT="\(.*\)"|GRUB_CMDLINE_LINUX_DEFAULT="\1 apparmor=0 security="|' /etc/default/grub
           update-grub 2>&1 | tail -3
       fi
+
+      # ---------------------------------------------------------------
+      # Disable Azure managed identity (prevent agent from touching
+      # Azure control plane). The VM boundary is our security boundary.
+      # ---------------------------------------------------------------
+      echo "Disabling Azure IMDS access..."
+      # Block the Azure Instance Metadata Service endpoint so no process
+      # on this VM can acquire tokens for Azure Resource Manager.
+      iptables -A OUTPUT -d 169.254.169.254 -j DROP
+      # Persist the rule across reboots
+      mkdir -p /etc/iptables
+      iptables-save > /etc/iptables/rules.v4
+      cat > /etc/systemd/system/iptables-restore.service << 'IPTEOF'
+      [Unit]
+      Description=Restore iptables rules
+      Before=network-pre.target
+      Wants=network-pre.target
+
+      [Service]
+      Type=oneshot
+      ExecStart=/sbin/iptables-restore /etc/iptables/rules.v4
+      RemainAfterExit=yes
+
+      [Install]
+      WantedBy=multi-user.target
+      IPTEOF
+      systemctl enable iptables-restore.service
 
       # ---------------------------------------------------------------
       # Mount data disk
@@ -186,7 +215,6 @@ write_files:
           cat > "$DATA_MOUNT/openclaw/.env" << 'ENVEOF'
       XAI_API_KEY=__XAI_API_KEY__
       TELEGRAM_BOT_TOKEN=__TELEGRAM_BOT_TOKEN__
-      OPENCLAW_GATEWAY_TOKEN=__GATEWAY_TOKEN__
       ENVEOF
           chmod 600 "$DATA_MOUNT/openclaw/.env"
       else
@@ -196,13 +224,20 @@ write_files:
       if [[ ! -f "$DATA_MOUNT/openclaw/openclaw.json" ]]; then
           cat > "$DATA_MOUNT/openclaw/openclaw.json" << 'CFGEOF'
       {
+        // --- Agent defaults ---
         "agents": {
           "defaults": {
             "model": {
               "primary": "xai/grok-4"
             },
             "workspace": "/home/azureuser/workspace",
-            "maxConcurrent": 4
+            "maxConcurrent": 4,
+            // No sandbox. The VM IS the sandbox.
+            "sandbox": {
+              "mode": "off"
+            },
+            // All sessions run elevated on host, no approval prompts.
+            "elevatedDefault": "full"
           },
           "list": [
             {
@@ -211,6 +246,8 @@ write_files:
             }
           ]
         },
+
+        // --- Model provider ---
         "models": {
           "mode": "merge",
           "providers": {
@@ -230,25 +267,51 @@ write_files:
             }
           }
         },
+
+        // --- Channels ---
         "channels": {
           "telegram": {
             "enabled": true,
-            "dmPolicy": "open",
-            "allowFrom": ["*"],
+            // Lock to your Telegram user ID. Replace with your actual ID.
+            // Find it by messaging @userinfobot on Telegram.
+            "dmPolicy": "allowlist",
+            "allowFrom": ["__TELEGRAM_USER_ID__"],
             "groupPolicy": "disabled",
             "streaming": "partial"
           }
         },
+
+        // --- Gateway ---
         "gateway": {
           "port": 18789,
-          "mode": "local"
+          "mode": "local",
+          // Loopback only - no auth needed. Only local processes can connect.
+          "bind": "loopback"
         },
+
+        // --- Tools: full autonomy ---
+        "tools": {
+          "exec": {
+            "security": "full",
+            "ask": "off",
+            "backgroundMs": 10000,
+            "timeoutSec": 1800
+          },
+          "web": {
+            "search": { "enabled": true },
+            "fetch": { "enabled": true }
+          }
+        },
+
+        // --- Browser: headed on Xvfb :99 ---
         "browser": {
           "enabled": true,
           "executablePath": "/usr/bin/google-chrome-stable",
           "headless": false,
           "noSandbox": true
         },
+
+        // --- Logging ---
         "logging": {
           "redactSensitive": "tools"
         }
@@ -257,6 +320,43 @@ write_files:
           chmod 644 "$DATA_MOUNT/openclaw/openclaw.json"
       else
           echo "Existing openclaw.json found on data disk. Keeping it."
+      fi
+
+      # ---------------------------------------------------------------
+      # Exec approvals: auto-approve everything, no prompts
+      # ---------------------------------------------------------------
+      if [[ ! -f "$DATA_MOUNT/openclaw/exec-approvals.json" ]]; then
+          cat > "$DATA_MOUNT/openclaw/exec-approvals.json" << 'APPROVEEOF'
+      {
+        "version": 1,
+        "defaults": {
+          "security": "full",
+          "ask": "off",
+          "askFallback": "full"
+        },
+        "agents": {
+          "*": {
+            "security": "full",
+            "ask": "off",
+            "askFallback": "full",
+            "allowlist": [
+              { "pattern": "**" }
+            ]
+          },
+          "main": {
+            "security": "full",
+            "ask": "off",
+            "askFallback": "full",
+            "allowlist": [
+              { "pattern": "**" }
+            ]
+          }
+        }
+      }
+      APPROVEEOF
+          chmod 644 "$DATA_MOUNT/openclaw/exec-approvals.json"
+      else
+          echo "Existing exec-approvals.json found on data disk. Keeping it."
       fi
 
       chown -R azureuser:azureuser "$DATA_MOUNT"
@@ -278,16 +378,16 @@ write_files:
       # Install software
       # ---------------------------------------------------------------
 
-      # Node.js 22
-      echo "Installing Node.js 22..."
-      curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+      # Node.js 24 (OpenClaw recommended)
+      echo "Installing Node.js 24..."
+      curl -fsSL https://deb.nodesource.com/setup_24.x | bash -
       apt-get install -y nodejs
 
       # OpenClaw
       echo "Installing OpenClaw..."
       npm install -g openclaw@latest
 
-      # pyautogui (not available as apt package on 24.04)
+      # pyautogui
       echo "Installing pyautogui..."
       pip3 install --break-system-packages pyautogui
 
@@ -319,8 +419,23 @@ write_files:
       sed -i 's/^max_bpp=.*/max_bpp=24/' /etc/xrdp/xrdp.ini
       sed -i 's/^xserverbpp=.*/xserverbpp=24/' /etc/xrdp/xrdp.ini
       grep -q 'bulk_compression' /etc/xrdp/xrdp.ini || sed -i '/\[Globals\]/a bulk_compression=true' /etc/xrdp/xrdp.ini
+
+      # Session persistence: don't kill sessions when RDP disconnects
+      # (sesman.ini.d/ may not be supported on all xrdp versions, so patch directly)
+      sed -i 's/^KillDisconnected=.*/KillDisconnected=false/' /etc/xrdp/sesman.ini 2>/dev/null || true
+      sed -i 's/^DisconnectedTimeLimit=.*/DisconnectedTimeLimit=0/' /etc/xrdp/sesman.ini 2>/dev/null || true
+      sed -i 's/^IdleTimeLimit=.*/IdleTimeLimit=0/' /etc/xrdp/sesman.ini 2>/dev/null || true
+
+      # If the keys don't exist yet, append them to [Sessions]
+      if ! grep -q 'KillDisconnected' /etc/xrdp/sesman.ini; then
+          sed -i '/\[Sessions\]/a KillDisconnected=false\nDisconnectedTimeLimit=0\nIdleTimeLimit=0' /etc/xrdp/sesman.ini
+      fi
+
       systemctl enable xrdp
       systemctl restart xrdp
+
+      # Disable screen blanking and power management for Xvfb display
+      su - azureuser -c "DISPLAY=:99 xset s off 2>/dev/null; DISPLAY=:99 xset -dpms 2>/dev/null" || true
 
       # Disable XFCE compositing
       su - azureuser -c "DISPLAY=:99 xfconf-query -c xfwm4 -p /general/use_compositing -s false" 2>/dev/null || true
@@ -353,7 +468,7 @@ write_files:
       StartupNotify=true
       DESK
 
-      cat > /home/azureuser/Desktop/OpenClaw.desktop << 'DESK'
+      cat > /home/azureuser/Desktop/OpenClaw-Dashboard.desktop << 'DESK'
       [Desktop Entry]
       Type=Application
       Name=OpenClaw Dashboard
@@ -362,6 +477,16 @@ write_files:
       Terminal=false
       Categories=Network;
       StartupNotify=true
+      DESK
+
+      cat > /home/azureuser/Desktop/Agent-Browser.desktop << 'DESK'
+      [Desktop Entry]
+      Type=Application
+      Name=Agent Browser Viewer
+      Comment=Watch the agent's Chrome browser (Xvfb :99 via VNC)
+      Exec=xfce4-terminal -e 'bash -c "echo Connecting to agent browser on :99...; DISPLAY=${DISPLAY} vncviewer localhost:5999 2>/dev/null || (echo Installing vncviewer...; sudo apt-get install -y tigervnc-viewer && vncviewer localhost:5999); exec bash"'
+      Icon=preferences-desktop-remote-desktop
+      Terminal=false
       DESK
 
       cat > /home/azureuser/Desktop/OpenClaw-Logs.desktop << 'DESK'
@@ -376,7 +501,7 @@ write_files:
       chmod +x /home/azureuser/Desktop/*.desktop
       chown -R azureuser:azureuser /home/azureuser/Desktop
 
-      # Mark desktop files as trusted for XFCE (required for double-click to work)
+      # Mark desktop files as trusted for XFCE
       su - azureuser -c "
           for f in ~/Desktop/*.desktop; do
               gio set \"\$f\" metadata::trusted true 2>/dev/null || true
@@ -399,8 +524,27 @@ write_files:
       systemctl daemon-reload
       systemctl enable xvfb.service
       systemctl start xvfb.service
+      systemctl enable x11vnc-xvfb.service
+      systemctl start x11vnc-xvfb.service
       systemctl enable openclaw-gateway.service
       systemctl start openclaw-gateway.service
+
+      # ---------------------------------------------------------------
+      # Post-start validation
+      # ---------------------------------------------------------------
+      sleep 5
+      echo "Running OpenClaw doctor..."
+      su - azureuser -c "DISPLAY=:99 openclaw doctor --fix" 2>/dev/null || true
+
+      # doctor --fix has a known issue where it adds gateway.auth even for
+      # loopback gateways. Strip it back out if that happened.
+      su - azureuser -c "openclaw config unset gateway.auth" 2>/dev/null || true
+
+      # Belt-and-suspenders: set exec approvals via CLI in case the JSON
+      # file format doesn't match the current version's schema
+      echo "Configuring exec approvals via CLI..."
+      su - azureuser -c 'openclaw approvals allowlist add --agent "*" "**"' 2>/dev/null || true
+      su - azureuser -c 'openclaw approvals allowlist add --agent "main" "**"' 2>/dev/null || true
 
       echo "=== OpenClaw Setup Complete ==="
       echo "Data disk mounted at /data"

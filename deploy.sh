@@ -122,6 +122,30 @@ if [[ -z "$TELEGRAM_BOT_TOKEN" ]]; then
 fi
 echo "[OK] Telegram bot token loaded"
 
+TELEGRAM_ID_FILE="${SCRIPT_DIR}/telegram-userid.txt"
+if [[ ! -f "$TELEGRAM_ID_FILE" ]]; then
+    echo "ERROR: telegram-userid.txt not found"
+    echo "       Create it: echo 'your-numeric-user-id' > telegram-userid.txt"
+    echo ""
+    echo "       To get your Telegram user ID:"
+    echo "         1. Open Telegram and message @userinfobot"
+    echo "         2. It replies with your numeric ID (e.g. 123456789)"
+    echo "         3. Copy that number into telegram-userid.txt"
+    exit 1
+fi
+TELEGRAM_USER_ID="$(tr -d '[:space:]' < "$TELEGRAM_ID_FILE")"
+if [[ -z "$TELEGRAM_USER_ID" ]]; then
+    echo "ERROR: telegram-userid.txt is empty"
+    exit 1
+fi
+if ! [[ "$TELEGRAM_USER_ID" =~ ^[0-9]+$ ]]; then
+    echo "ERROR: telegram-userid.txt must contain a numeric ID (e.g. 123456789)"
+    echo "       Got: ${TELEGRAM_USER_ID}"
+    echo "       Message @userinfobot on Telegram to get your ID."
+    exit 1
+fi
+echo "[OK] Telegram user ID: ${TELEGRAM_USER_ID}"
+
 SSH_KEY_FILE=""
 for key in "$HOME/.ssh/id_ed25519.pub" "$HOME/.ssh/id_rsa.pub"; do
     if [[ -f "$key" ]]; then
@@ -144,7 +168,6 @@ if [[ ! -f "$CLOUD_INIT_TEMPLATE" ]]; then
     exit 1
 fi
 
-GATEWAY_TOKEN="$(openssl rand -hex 32)"
 RDP_PASSWORD="$(openssl rand -base64 16 | tr -d '/+=' | head -c 20)Aa1!"
 
 CLOUD_INIT_RENDERED="$(mktemp)"
@@ -153,7 +176,7 @@ trap 'rm -f "$CLOUD_INIT_RENDERED"' EXIT
 sed \
     -e "s|__XAI_API_KEY__|${XAI_API_KEY}|g" \
     -e "s|__TELEGRAM_BOT_TOKEN__|${TELEGRAM_BOT_TOKEN}|g" \
-    -e "s|__GATEWAY_TOKEN__|${GATEWAY_TOKEN}|g" \
+    -e "s|__TELEGRAM_USER_ID__|${TELEGRAM_USER_ID}|g" \
     -e "s|__RDP_PASSWORD__|${RDP_PASSWORD}|g" \
     "$CLOUD_INIT_TEMPLATE" > "$CLOUD_INIT_RENDERED"
 
@@ -340,6 +363,12 @@ VERIFY=$(ssh $SSH_OPTS -i "$SSH_KEY" "${ADMIN_USER}@${PUBLIC_IP}" "
     else
         echo \"  Data disk:        NOT MOUNTED (check logs)\"
     fi
+    IMDS=\$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 -H 'Metadata: true' 'http://169.254.169.254/metadata/instance?api-version=2023-07-01' 2>/dev/null || echo 'blocked')
+    if [[ \"\$IMDS\" == '000' || \"\$IMDS\" == 'blocked' ]]; then
+        echo \"  Azure IMDS:       blocked (agent can't touch Azure)\"
+    else
+        echo \"  Azure IMDS:       REACHABLE (firewall rule may have failed)\"
+    fi
 " 2>/dev/null)
 echo "$VERIFY"
 
@@ -357,6 +386,9 @@ echo "   Password: ${RDP_PASSWORD}"
 echo ""
 echo " Telegram:"
 echo "   Send any message to your bot -- it responds immediately."
+echo ""
+echo " Dashboard (inside RDP):"
+echo "   Double-click 'OpenClaw Dashboard' on the desktop."
 echo ""
 echo " Update (new OS, keep data):"
 echo "   ./deploy.sh --update"

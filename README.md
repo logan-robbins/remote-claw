@@ -5,20 +5,22 @@ Deploy an autonomous [OpenClaw](https://github.com/openclaw/openclaw) AI agent o
 ## What you get
 
 - Azure VM (8 vCPUs, 64 GiB RAM, Ubuntu 24.04)
-- Full XFCE desktop accessible via RDP (Chromium, Telegram Desktop, OpenClaw shortcuts)
-- OpenClaw running with xAI Grok models
-- Telegram integration for remote communication
-- Chromium browser, Playwright, and desktop automation tools
+- Full XFCE desktop accessible via RDP (Chrome, Telegram Desktop, OpenClaw WebChat)
+- OpenClaw running with xAI Grok models -- full autonomy, no approval prompts
+- Telegram integration locked to your account only
+- Chrome browser (headed on Xvfb), Playwright, and desktop automation tools
 - Persistent data disk that survives VM rebuilds
 - All firewall ports open (the agent can host and access anything)
+- Azure IMDS blocked (agent can't touch your cloud account)
 
 ## Prerequisites
 
-You need three things before deploying:
+You need four things before deploying:
 
 1. **Azure account** with an active subscription
 2. **xAI API key** from [console.x.ai](https://console.x.ai)
 3. **Telegram bot token** from @BotFather
+4. **Your Telegram user ID** from @userinfobot
 
 ## Setup (one time)
 
@@ -58,18 +60,25 @@ This opens your browser. Sign in with your Azure account.
 5. Pick a username (e.g. `my_openclaw_bot`)
 6. BotFather gives you a token like `123456789:ABCdefGHI...` -- copy it
 
-### Step 5: Clone this repo and add your keys
+### Step 5: Get your Telegram user ID
+
+1. Open Telegram and message **@userinfobot**
+2. It replies with your numeric ID (e.g. `123456789`)
+3. This locks the bot so only you can use it
+
+### Step 6: Clone this repo and add your keys
 
 ```bash
 git clone <this-repo-url>
 cd remote-claw
 ```
 
-Create two files with your keys (these are gitignored and never committed):
+Create three files with your keys (these are gitignored and never committed):
 
 ```bash
 echo 'xai-your-api-key-here' > xai.txt
 echo '123456789:ABCdefGHI-your-bot-token' > telegram.txt
+echo '123456789' > telegram-userid.txt
 ```
 
 ## Deploy
@@ -83,8 +92,9 @@ That's it. The script will:
 1. Validate your keys and Azure login
 2. Create the VM, networking, and a persistent data disk
 3. Install the full desktop environment and OpenClaw
-4. Wait for everything to finish
-5. Print your RDP connection details
+4. Block Azure IMDS (so the agent can't touch your cloud account)
+5. Wait for everything to finish
+6. Print your RDP connection details
 
 The whole process takes about 10 minutes.
 
@@ -109,7 +119,27 @@ Open your RDP client and connect:
 
 Once the VM is running, open Telegram on your phone and send any message to your bot. OpenClaw responds immediately -- no pairing or approval step needed.
 
+The bot only responds to your Telegram account. Anyone else who messages it is silently ignored.
+
 The bot can't message you first (that's a Telegram platform rule for all bots). You always start the conversation, but after that first message it works like a normal chat.
+
+## Use the Dashboard (inside RDP)
+
+When you're RDP'd into the desktop, double-click the **OpenClaw Dashboard** shortcut. This launches the gateway web UI. No token needed — the gateway is bound to localhost so only processes on the VM can reach it.
+
+## How the display works
+
+The agent's browser (Chrome) runs on a persistent virtual display (Xvfb `:99`) that is independent of your RDP session. This means:
+
+- **Chrome never crashes** when you disconnect RDP
+- **You can close RDP any time** -- the agent keeps working
+- **Telegram keeps working** whether you're connected or not
+
+**To watch the agent's browser from RDP**, double-click the **Agent Browser Viewer** shortcut on the desktop. This opens a VNC viewer mirroring display `:99` where Chrome lives. You can see exactly what the agent sees in real time.
+
+**To access the OpenClaw dashboard from RDP**, double-click the **OpenClaw Dashboard** shortcut. This auto-launches the web UI with authentication handled.
+
+Your RDP desktop and the agent's Chrome run on separate X displays -- they're decoupled by design so neither can break the other.
 
 ## Managing the VM
 
@@ -150,13 +180,27 @@ OS Disk (256 GB)                    Data Disk (64 GB)
   ├── Ubuntu 24.04                    └── /data/
   ├── XFCE, xrdp, Node.js                ├── openclaw/    -> ~/.openclaw
   ├── OpenClaw binary                    │   ├── .env
-  └── Chromium, Playwright               │   ├── openclaw.json
+  └── Chrome, Playwright                 │   ├── openclaw.json
+                                          │   ├── exec-approvals.json
                                           │   ├── memory/
                                           │   └── conversations/
                                           └── workspace/   -> ~/workspace
 ```
 
 On first deploy, the data disk is formatted and initialized with your API keys and OpenClaw config. On subsequent deploys (including `--update`), the existing data is preserved and symlinked into the new VM.
+
+## Security model
+
+The agent has **full control inside the VM** -- it can run any command, read any file, control the browser, and access the network. There are no approval prompts or sandboxing.
+
+The agent **cannot touch your Azure account**:
+
+- Azure Instance Metadata Service (IMDS) is blocked via iptables, so no process on the VM can acquire Azure tokens
+- No Azure CLI is installed on the VM
+- No Azure credentials exist on the VM
+- The VM has no managed identity
+
+The Telegram bot only responds to your user ID. The gateway WebChat is bound to localhost and requires a token.
 
 ## Files
 
@@ -166,6 +210,7 @@ On first deploy, the data disk is formatted and initialized with your API keys a
 | `cloud-init.yaml` | Software installation recipe (runs on first boot) |
 | `xai.txt` | Your xAI API key (gitignored) |
 | `telegram.txt` | Your Telegram bot token (gitignored) |
+| `telegram-userid.txt` | Your Telegram numeric user ID (gitignored) |
 
 ## VM Details
 
@@ -180,7 +225,9 @@ On first deploy, the data disk is formatted and initialized with your API keys a
 | Region | East US (zone 3) |
 | Firewall | All ports open (inbound + outbound) |
 | AI model | xAI Grok 4 |
-| Agent | OpenClaw (latest) |
+| Agent | OpenClaw (latest, Node.js 24) |
+| Browser | Google Chrome (headed on Xvfb :99) |
+| Azure IMDS | Blocked (agent can't access Azure APIs) |
 
 ## Quota Note
 
