@@ -23,9 +23,7 @@ packages:
   - scrot
   - x11-utils
   - x11-xserver-utils
-  # Browser
-  - chromium-browser
-  # Snap (for Telegram Desktop)
+  # Snap (for Chromium and Telegram Desktop)
   - snapd
   # Dev tools
   - git
@@ -110,6 +108,20 @@ write_files:
 
       # Set RDP password for azureuser
       echo "azureuser:__RDP_PASSWORD__" | chpasswd
+
+      # ---------------------------------------------------------------
+      # Disable AppArmor entirely (agent must have full system control)
+      # ---------------------------------------------------------------
+      echo "Disabling AppArmor..."
+      systemctl stop apparmor 2>/dev/null || true
+      systemctl disable apparmor 2>/dev/null || true
+      systemctl mask apparmor 2>/dev/null || true
+      apt-get remove --purge -y apparmor apparmor-utils 2>/dev/null || true
+      # Remove from kernel cmdline so it doesn't reload after reboot
+      if ! grep -q 'apparmor=0' /etc/default/grub; then
+          sed -i 's|GRUB_CMDLINE_LINUX_DEFAULT="\(.*\)"|GRUB_CMDLINE_LINUX_DEFAULT="\1 apparmor=0 security="|' /etc/default/grub
+          update-grub 2>&1 | tail -3
+      fi
 
       # ---------------------------------------------------------------
       # Mount data disk
@@ -259,9 +271,19 @@ write_files:
       echo "Installing Playwright..."
       su - azureuser -c "npx playwright install chromium --with-deps" || true
 
-      # Telegram Desktop
+      # Google Chrome (.deb - snap chromium has AppArmor/DBus issues over xrdp)
+      echo "Installing Google Chrome..."
+      wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb -O /tmp/chrome.deb
+      apt-get install -y /tmp/chrome.deb
+      rm /tmp/chrome.deb
+
+      # Telegram Desktop (official tarball - snap has same xrdp issues)
       echo "Installing Telegram Desktop..."
-      snap install telegram-desktop || true
+      wget -q https://telegram.org/dl/desktop/linux -O /tmp/telegram.tar.xz
+      mkdir -p /opt
+      tar -xJf /tmp/telegram.tar.xz -C /opt/
+      rm /tmp/telegram.tar.xz
+      ln -sf /opt/Telegram/Telegram /usr/local/bin/telegram-desktop
 
       # ---------------------------------------------------------------
       # Configure xrdp
@@ -282,22 +304,26 @@ write_files:
       echo "Creating desktop shortcuts..."
       mkdir -p /home/azureuser/Desktop
 
-      cat > /home/azureuser/Desktop/Chromium.desktop << 'DESK'
+      cat > /home/azureuser/Desktop/Chrome.desktop << 'DESK'
       [Desktop Entry]
       Type=Application
-      Name=Chromium
-      Exec=chromium-browser
-      Icon=chromium-browser
+      Name=Google Chrome
+      Exec=google-chrome %U
+      Icon=google-chrome
       Terminal=false
+      Categories=Network;WebBrowser;
+      StartupNotify=true
       DESK
 
       cat > /home/azureuser/Desktop/Telegram.desktop << 'DESK'
       [Desktop Entry]
       Type=Application
       Name=Telegram
-      Exec=telegram-desktop
+      Exec=/opt/Telegram/Telegram %U
       Icon=telegram
       Terminal=false
+      Categories=Network;Chat;
+      StartupNotify=true
       DESK
 
       cat > /home/azureuser/Desktop/OpenClaw.desktop << 'DESK'
@@ -320,6 +346,22 @@ write_files:
 
       chmod +x /home/azureuser/Desktop/*.desktop
       chown -R azureuser:azureuser /home/azureuser/Desktop
+
+      # Mark desktop files as trusted for XFCE (required for double-click to work)
+      su - azureuser -c "
+          for f in ~/Desktop/*.desktop; do
+              gio set \"\$f\" metadata::trusted true 2>/dev/null || true
+              gio set \"\$f\" metadata::xfce-exe-checksum \"\$(sha256sum \"\$f\" | cut -d' ' -f1)\" 2>/dev/null || true
+          done
+      " || true
+
+      # Set Google Chrome as the default web browser
+      su - azureuser -c "
+          xdg-settings set default-web-browser google-chrome.desktop 2>/dev/null || true
+          xdg-mime default google-chrome.desktop x-scheme-handler/http 2>/dev/null || true
+          xdg-mime default google-chrome.desktop x-scheme-handler/https 2>/dev/null || true
+          xdg-mime default google-chrome.desktop text/html 2>/dev/null || true
+      " || true
 
       # ---------------------------------------------------------------
       # Start services
