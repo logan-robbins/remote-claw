@@ -247,7 +247,7 @@ The Telegram bot can be locked to your user ID via `telegram-userid.txt`. The ga
 |---|---|
 | `deploy.sh` | Multi-claw CLI |
 | `cloud-init-bake.yaml` | Full software install (runs once per bake) |
-| `cloud-init.yaml` | Runtime config (runs on every deploy, injects secrets) |
+| `runtime-init.sh` | Runtime config template, SSH-injected per deploy with secrets |
 | `xai.txt` | Your xAI API key (gitignored) |
 | `telegram.txt` | Your Telegram bot token (gitignored) |
 | `telegram-userid.txt` | *(optional)* Your Telegram numeric user ID (gitignored) |

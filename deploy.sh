@@ -51,7 +51,7 @@ BAKE_OS_DISK_SIZE=64                   # smaller disk = faster bake
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLOUD_INIT_BAKE="${SCRIPT_DIR}/cloud-init-bake.yaml"
-CLOUD_INIT_RUNTIME="${SCRIPT_DIR}/cloud-init.yaml"
+RUNTIME_INIT_TEMPLATE="${SCRIPT_DIR}/runtime-init.sh"
 
 SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
 
@@ -315,6 +315,7 @@ ensure_image_definition() {
             --os-type Linux \
             --os-state specialized \
             --hyper-v-generation V2 \
+            --features SecurityType=TrustedLaunch \
             --output none
     fi
 }
@@ -417,7 +418,7 @@ bake_image() {
         --custom-data "$CLOUD_INIT_BAKE" \
         --zone 3 \
         --public-ip-sku Standard \
-        --nsg "" \
+        --nsg "$NSG_NAME" \
         --output none
 
     local bake_ip
@@ -426,13 +427,19 @@ bake_image() {
     echo ""
     echo "Waiting for software installation (~8-10 min)..."
 
-    # Wait for SSH
-    for i in $(seq 1 30); do
+    # Wait for SSH (up to 3 minutes — VM boot is fast, but custom-data agent may take a moment)
+    local ssh_ready=false
+    for i in $(seq 1 36); do
         if ssh $SSH_OPTS -i "$SSH_KEY" -o ConnectTimeout=5 "${ADMIN_USER}@${bake_ip}" "true" 2>/dev/null; then
+            ssh_ready=true
             break
         fi
-        sleep 10
+        sleep 5
     done
+    if [[ "$ssh_ready" != true ]]; then
+        echo "ERROR: bake VM didn't accept SSH within 3 minutes"
+        exit 1
+    fi
 
     # Wait for cloud-init to finish
     ssh $SSH_OPTS -i "$SSH_KEY" -o ServerAliveInterval=30 "${ADMIN_USER}@${bake_ip}" \
@@ -459,12 +466,13 @@ bake_image() {
     echo "Capturing image version $new_version..."
     local bake_vm_id
     bake_vm_id=$(az vm show -g "$RESOURCE_GROUP" --name "$BAKE_VM_NAME" --query id -o tsv)
+    # For specialized images, use --virtual-machine (not --managed-image)
     az sig image-version create \
         -g "$RESOURCE_GROUP" \
         --gallery-name "$GALLERY_NAME" \
         --gallery-image-definition "$IMAGE_DEFINITION" \
         --gallery-image-version "$new_version" \
-        --managed-image "$bake_vm_id" \
+        --virtual-machine "$bake_vm_id" \
         --output none
 
     echo "Cleaning up bake VM..."
@@ -685,13 +693,16 @@ list_images() {
     fi
 }
 
-# --- Runtime cloud-init rendering --------------------------------------------
+# --- Runtime init script rendering (SSH-injected, not cloud-init) -----------
+# Specialized images don't honor --custom-data (Azure skips provisioning for
+# them). Instead we SCP a rendered bash script and run it over SSH after the
+# VM boots.
 
-prepare_runtime_cloud_init() {
+prepare_runtime_init() {
     RDP_PASSWORD="$(openssl rand -base64 16 | tr -d '/+=' | head -c 20)Aa1!"
 
-    CLOUD_INIT_RENDERED="$(mktemp)"
-    trap 'rm -f "$CLOUD_INIT_RENDERED"' EXIT
+    RUNTIME_INIT_RENDERED="$(mktemp)"
+    trap 'rm -f "$RUNTIME_INIT_RENDERED"' EXIT
 
     sed \
         -e "s|__XAI_API_KEY__|${XAI_API_KEY}|g" \
@@ -699,9 +710,9 @@ prepare_runtime_cloud_init() {
         -e "s|__TELEGRAM_DM_POLICY__|${TELEGRAM_DM_POLICY}|g" \
         -e "s|__TELEGRAM_ALLOW_FROM__|${TELEGRAM_ALLOW_FROM}|g" \
         -e "s|__RDP_PASSWORD__|${RDP_PASSWORD}|g" \
-        "$CLOUD_INIT_RUNTIME" > "$CLOUD_INIT_RENDERED"
+        "$RUNTIME_INIT_TEMPLATE" > "$RUNTIME_INIT_RENDERED"
 
-    echo "[OK] Runtime cloud-init prepared"
+    echo "[OK] Runtime init script prepared"
 }
 
 # --- VM creation from gallery image ------------------------------------------
@@ -714,6 +725,11 @@ create_vm_from_image() {
     data_disk=$(claw_data_name "$claw")
 
     echo "Creating VM ${vm} from image $(basename "$image_id")..."
+    # --specialized images inherit user + SSH keys from the bake VM.
+    # The Azure CLI still requires an SSH key for parameter validation; pass
+    # our local key (Azure ignores it when --specialized is set).
+    # NO --custom-data: specialized images skip provisioning, so cloud-init
+    # won't run the runtime config. We SSH-inject it after boot instead.
     az vm create \
         -g "$RESOURCE_GROUP" \
         --name "$vm" \
@@ -724,58 +740,76 @@ create_vm_from_image() {
         --os-disk-size-gb "$OS_DISK_SIZE" \
         --storage-sku Premium_LRS \
         --attach-data-disks "$data_disk" \
-        --custom-data "$CLOUD_INIT_RENDERED" \
         --zone 3 \
+        --security-type TrustedLaunch \
+        --enable-secure-boot true \
+        --enable-vtpm true \
+        --ssh-key-values "$SSH_KEY_FILE" \
         --output none
 }
 
-wait_for_cloud_init() {
+inject_runtime_init() {
+    # SCP the rendered runtime-init.sh to the VM and run it as root.
+    local claw="$1"
+    local ip="$2"
+    echo "Injecting runtime config over SSH..."
+
+    # Copy the script
+    scp $SSH_OPTS -i "$SSH_KEY" -o ConnectTimeout=30 \
+        "$RUNTIME_INIT_RENDERED" \
+        "${ADMIN_USER}@${ip}:/tmp/openclaw-runtime-init.sh" 2>/dev/null
+
+    # Run it as root
+    ssh $SSH_OPTS -i "$SSH_KEY" -o ConnectTimeout=30 -o ServerAliveInterval=30 \
+        "${ADMIN_USER}@${ip}" \
+        "chmod +x /tmp/openclaw-runtime-init.sh && sudo /tmp/openclaw-runtime-init.sh && rm /tmp/openclaw-runtime-init.sh" \
+        2>&1 | sed 's/^/  /'
+}
+
+wait_for_ssh() {
     local claw="$1"
     local vm ip
     vm=$(claw_vm_name "$claw")
     ip=$(az vm show -g "$RESOURCE_GROUP" --name "$vm" -d --query publicIps -o tsv)
     echo ""
-    echo "VM up at ${ip}. Waiting for runtime cloud-init (~1-2 min)..."
+    echo "VM up at ${ip}. Waiting for SSH..."
 
-    for i in $(seq 1 30); do
+    for i in $(seq 1 60); do
         if ssh $SSH_OPTS -i "$SSH_KEY" -o ConnectTimeout=5 "${ADMIN_USER}@${ip}" "true" 2>/dev/null; then
-            break
+            # Return the IP via global var for the caller
+            CLAW_IP="$ip"
+            return 0
         fi
         sleep 5
     done
-
-    ssh $SSH_OPTS -i "$SSH_KEY" -o ServerAliveInterval=15 "${ADMIN_USER}@${ip}" \
-        "sudo cloud-init status --wait" 2>/dev/null || true
-
-    # Return the IP via global var for the caller
-    CLAW_IP="$ip"
+    echo "ERROR: SSH didn't become available within 5 minutes"
+    return 1
 }
 
 verify_services() {
     local claw="$1"
     echo ""
     echo "Verifying services on $(claw_vm_name "$claw")..."
-    ssh $SSH_OPTS -i "$SSH_KEY" "${ADMIN_USER}@${CLAW_IP}" "
-        OC=\$(sudo systemctl is-active openclaw-gateway 2>/dev/null || echo inactive)
-        XRDP=\$(sudo systemctl is-active xrdp 2>/dev/null || echo inactive)
-        XVFB=\$(sudo systemctl is-active xvfb 2>/dev/null || echo inactive)
-        VNC=\$(sudo systemctl is-active x11vnc-xvfb 2>/dev/null || echo inactive)
-        echo \"  OpenClaw Gateway: \$OC\"
-        echo \"  xrdp (desktop):   \$XRDP\"
-        echo \"  Xvfb (display):   \$XVFB\"
-        echo \"  x11vnc (mirror):  \$VNC\"
-        if mount | grep -q '/data '; then
-            echo \"  Data disk:        mounted\"
+    ssh $SSH_OPTS -i "$SSH_KEY" "${ADMIN_USER}@${CLAW_IP}" '
+        OC=$(sudo systemctl is-active openclaw-gateway 2>/dev/null || echo inactive)
+        XRDP=$(sudo systemctl is-active xrdp 2>/dev/null || echo inactive)
+        XVFB=$(sudo systemctl is-active xvfb 2>/dev/null || echo inactive)
+        VNC=$(sudo systemctl is-active x11vnc-xvfb 2>/dev/null || echo inactive)
+        echo "  OpenClaw Gateway: $OC"
+        echo "  xrdp (desktop):   $XRDP"
+        echo "  Xvfb (display):   $XVFB"
+        echo "  x11vnc (mirror):  $VNC"
+        if mount | grep -q "/data "; then
+            echo "  Data disk:        mounted"
         else
-            echo \"  Data disk:        NOT MOUNTED\"
+            echo "  Data disk:        NOT MOUNTED"
         fi
-        IMDS=\$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 -H 'Metadata: true' 'http://169.254.169.254/metadata/instance?api-version=2023-07-01' 2>/dev/null || echo blocked)
-        if [[ \"\$IMDS\" == '000' || \"\$IMDS\" == 'blocked' ]]; then
-            echo \"  Azure IMDS:       blocked\"
+        if sudo iptables -C OUTPUT -d 169.254.169.254 -j DROP 2>/dev/null; then
+            echo "  Azure IMDS:       blocked"
         else
-            echo \"  Azure IMDS:       REACHABLE (expected blocked)\"
+            echo "  Azure IMDS:       REACHABLE (expected blocked)"
         fi
-    " 2>/dev/null || echo "(verification skipped)"
+    ' 2>/dev/null || echo "(verification skipped)"
 }
 
 print_credentials() {
@@ -841,7 +875,7 @@ fi
 # Validate secrets + SSH key (needed for create/update/fresh)
 validate_secrets
 validate_ssh_key
-prepare_runtime_cloud_init
+prepare_runtime_init
 
 # --update: claw must exist, keep data disk
 if [[ "$UPDATE" == true ]]; then
@@ -899,6 +933,7 @@ ensure_claw_public_ip "$CLAW_NAME"
 ensure_claw_nic "$CLAW_NAME"
 ensure_claw_data_disk "$CLAW_NAME"
 create_vm_from_image "$CLAW_NAME" "$IMAGE_ID"
-wait_for_cloud_init "$CLAW_NAME"
+wait_for_ssh "$CLAW_NAME"
+inject_runtime_init "$CLAW_NAME" "$CLAW_IP"
 verify_services "$CLAW_NAME"
 print_credentials "$CLAW_NAME"

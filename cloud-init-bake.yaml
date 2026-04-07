@@ -16,10 +16,15 @@ package_update: true
 package_upgrade: true
 
 packages:
-  # Desktop environment (XFCE on X11)
-  - xfce4
-  - xfce4-goodies
+  # Desktop environment (XFCE on X11) - minimal, no goodies bloat
+  - xfce4-session
+  - xfce4-panel
+  - xfwm4
+  - xfdesktop4
+  - xfce4-settings
   - xfce4-terminal
+  - thunar
+  - xfconf
   - dbus-x11
   # Remote desktop
   - xrdp
