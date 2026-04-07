@@ -18,9 +18,9 @@ Deploy multiple independent [OpenClaw](https://github.com/openclaw/openclaw) AI 
 ## Prerequisites
 
 1. **Azure account** with an active subscription
-2. **xAI API key** from [console.x.ai](https://console.x.ai)
-3. **Telegram bot token** from @BotFather
-4. *(Optional)* **Your Telegram user ID** from @userinfobot (locks the bot to your account only)
+2. **xAI API key** from [console.x.ai](https://console.x.ai) (shared by all claws)
+3. **A Telegram bot token per claw** from @BotFather (Telegram allows only one active connection per bot, so each claw needs its own bot)
+4. *(Optional)* **Your Telegram user ID** from @userinfobot, per claw (locks that bot to your account only)
 
 ## Setup (one time)
 
@@ -44,36 +44,48 @@ az login
 
 Go to [console.x.ai](https://console.x.ai), create a new API key (starts with `xai-`).
 
-### Step 4: Create a Telegram bot
+### Step 4: Create a Telegram bot for each claw
+
+Each claw needs its own Telegram bot. Telegram only allows one active connection per bot token, so sharing a token across claws would cause them to fight each other for messages.
+
+For each claw you plan to deploy:
 
 1. Open Telegram and message **@BotFather**
-2. Send `/newbot`, pick a name and username
+2. Send `/newbot`, pick a name and a unique username (e.g. `my_main_claw_bot`, `my_research_claw_bot`)
 3. Copy the token (looks like `123456789:ABCdefGHI...`)
+4. Save the token to a variable named `TELEGRAM_BOT_TOKEN_<CLAW>` in `.env` (next step)
 
 ### Step 5: *(Optional)* Get your Telegram user ID
 
-If you want to lock the bot to your account only:
+If you want to lock the bots to your account only:
 
 1. Message **@userinfobot** on Telegram
-2. Copy your numeric ID
+2. Copy your numeric ID (same ID works for all bots — it's your Telegram identity)
 
-If you skip this, the bot responds to anyone who messages it (fine if nobody else knows the bot username).
+You'll set this per claw in `.env` as `TELEGRAM_USER_ID_<CLAW>` in the next step. If you skip it, each bot responds to anyone who messages it.
 
 ### Step 6: Clone and add your keys
 
 ```bash
 git clone https://github.com/logan-robbins/remote-claw.git
 cd remote-claw
+cp .env.template .env
 ```
 
-Create the key files (gitignored, never committed):
+Edit `.env` and set:
+- `XAI_API_KEY` (shared by all claws)
+- `TELEGRAM_BOT_TOKEN_<CLAW>` for each claw you want to deploy (e.g. `TELEGRAM_BOT_TOKEN_MAIN`)
+- *(optional)* `TELEGRAM_USER_ID_<CLAW>` to lock a specific bot to your account
 
-```bash
-echo 'xai-your-api-key-here' > xai.txt
-echo '123456789:ABCdefGHI-your-bot-token' > telegram.txt
-# Optional: lock bot to your account
-echo '123456789' > telegram-userid.txt
-```
+**Variable name rules**: claw name uppercased, hyphens converted to underscores.
+
+| Claw name | Env variable |
+|---|---|
+| `main` | `TELEGRAM_BOT_TOKEN_MAIN` |
+| `research` | `TELEGRAM_BOT_TOKEN_RESEARCH` |
+| `research-v2` | `TELEGRAM_BOT_TOKEN_RESEARCH_V2` |
+
+`.env` is gitignored and never committed.
 
 ## Usage
 
@@ -90,15 +102,19 @@ When it finishes it prints your RDP credentials. Open Microsoft Remote Desktop (
 
 ### Use Telegram
 
-Open Telegram on your phone and send any message to your bot. OpenClaw responds immediately — no pairing or approval step. By default the bot responds to anyone who messages it; if you set `telegram-userid.txt`, the bot is locked to your account only and silently ignores everyone else.
+Open Telegram on your phone and send any message to the bot for a specific claw. OpenClaw responds immediately — no pairing or approval step. By default each bot responds to anyone who messages it; if you set `TELEGRAM_USER_ID_<CLAW>` in `.env`, that bot is locked to your account only and silently ignores everyone else.
+
+Each claw has its own bot, so you can talk to different claws independently.
 
 ### Deploy a second claw
+
+Before creating a second claw, create a second Telegram bot via @BotFather and add its token to `.env` (e.g. `TELEGRAM_BOT_TOKEN_RESEARCH=...`). Then:
 
 ```bash
 ./deploy.sh research
 ```
 
-Reuses the baked image — takes ~2-3 min. Gets its own public IP, its own data disk, its own fresh OpenClaw state. Both claws run side-by-side.
+Reuses the baked image — takes ~2-3 min. Gets its own public IP, its own data disk, its own Telegram bot, its own fresh OpenClaw state. Both claws run side-by-side independently.
 
 ```bash
 ./deploy.sh list
@@ -231,7 +247,7 @@ The agent **cannot touch your Azure account**:
 - No Azure credentials exist on the VM
 - The VM has no managed identity
 
-The Telegram bot can be locked to your user ID via `telegram-userid.txt`. The gateway UI is bound to localhost (only reachable from inside the VM via RDP).
+Each claw's Telegram bot can be locked to your user ID via `TELEGRAM_USER_ID_<CLAW>` in `.env`. The gateway UI is bound to localhost (only reachable from inside the VM via RDP).
 
 ## Connect via RDP
 
@@ -248,9 +264,8 @@ The Telegram bot can be locked to your user ID via `telegram-userid.txt`. The ga
 | `deploy.sh` | Multi-claw CLI |
 | `cloud-init-bake.yaml` | Full software install (runs once per bake) |
 | `runtime-init.sh` | Runtime config template, SSH-injected per deploy with secrets |
-| `xai.txt` | Your xAI API key (gitignored) |
-| `telegram.txt` | Your Telegram bot token (gitignored) |
-| `telegram-userid.txt` | *(optional)* Your Telegram numeric user ID (gitignored) |
+| `.env.template` | Template for your secrets |
+| `.env` | Your actual secrets — xAI key, Telegram bot token, optional user ID (gitignored) |
 
 ## VM Details
 

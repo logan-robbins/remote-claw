@@ -172,50 +172,68 @@ validate_prereqs() {
 }
 
 validate_secrets() {
-    # xAI key
-    local xai_file="${SCRIPT_DIR}/xai.txt"
-    if [[ ! -f "$xai_file" ]]; then
-        echo "ERROR: xai.txt not found"
-        echo "       Create it: echo 'your-xai-api-key' > xai.txt"
+    # Requires $CLAW_NAME to be set (only called for claw-scoped operations)
+    local env_file="${SCRIPT_DIR}/.env"
+    if [[ ! -f "$env_file" ]]; then
+        echo "ERROR: .env not found"
+        echo "       Create it: cp .env.template .env"
+        echo "       Then edit .env and fill in your keys."
         exit 1
     fi
-    XAI_API_KEY="$(tr -d '[:space:]' < "$xai_file")"
-    [[ -z "$XAI_API_KEY" ]] && { echo "ERROR: xai.txt is empty"; exit 1; }
+
+    # Source the .env file
+    set -a
+    # shellcheck disable=SC1090
+    source "$env_file"
+    set +a
+
+    # xAI key (shared by all claws, required)
+    if [[ -z "${XAI_API_KEY:-}" ]]; then
+        echo "ERROR: XAI_API_KEY not set in .env"
+        exit 1
+    fi
     echo "[OK] xAI API key loaded"
 
-    # Telegram bot token
-    local tg_file="${SCRIPT_DIR}/telegram.txt"
-    if [[ ! -f "$tg_file" ]]; then
-        echo "ERROR: telegram.txt not found"
-        echo "       Create it: echo 'your-bot-token' > telegram.txt"
+    # Compute the per-claw env var names.
+    # Claw name -> uppercase, hyphens to underscores.
+    # Example: "research-v2" -> "RESEARCH_V2"
+    local claw_upper
+    claw_upper="$(echo "$CLAW_NAME" | tr 'a-z-' 'A-Z_')"
+    local token_var="TELEGRAM_BOT_TOKEN_${claw_upper}"
+    local userid_var="TELEGRAM_USER_ID_${claw_upper}"
+
+    # Telegram bot token (required, per-claw)
+    TELEGRAM_BOT_TOKEN="${!token_var:-}"
+    if [[ -z "$TELEGRAM_BOT_TOKEN" ]]; then
+        echo "ERROR: ${token_var} not set in .env"
         echo ""
-        echo "       To get a bot token: message @BotFather, send /newbot"
+        echo "       Each claw needs its own Telegram bot (Telegram only allows"
+        echo "       one active connection per bot token)."
+        echo ""
+        echo "       Create a bot for claw '${CLAW_NAME}':"
+        echo "         1. Message @BotFather on Telegram"
+        echo "         2. Send /newbot and pick a name/username"
+        echo "         3. Add to .env:"
+        echo "              ${token_var}=<the-token>"
         exit 1
     fi
-    TELEGRAM_BOT_TOKEN="$(tr -d '[:space:]' < "$tg_file")"
-    [[ -z "$TELEGRAM_BOT_TOKEN" ]] && { echo "ERROR: telegram.txt is empty"; exit 1; }
-    echo "[OK] Telegram bot token loaded"
+    echo "[OK] Telegram bot token loaded for claw '${CLAW_NAME}'"
 
-    # Telegram user ID (optional)
-    local tgid_file="${SCRIPT_DIR}/telegram-userid.txt"
-    if [[ -f "$tgid_file" ]]; then
-        local uid
-        uid="$(tr -d '[:space:]' < "$tgid_file")"
-        if [[ -z "$uid" ]]; then
-            echo "ERROR: telegram-userid.txt is empty (delete the file to skip the allowlist)"
-            exit 1
-        fi
-        if ! [[ "$uid" =~ ^[0-9]+$ ]]; then
-            echo "ERROR: telegram-userid.txt must contain a numeric ID (got: $uid)"
+    # Telegram user ID (optional, per-claw)
+    local telegram_user_id="${!userid_var:-}"
+    if [[ -n "$telegram_user_id" ]]; then
+        if ! [[ "$telegram_user_id" =~ ^[0-9]+$ ]]; then
+            echo "ERROR: ${userid_var} must be numeric (got: $telegram_user_id)"
+            echo "       Message @userinfobot on Telegram to get your ID."
             exit 1
         fi
         TELEGRAM_DM_POLICY="allowlist"
-        TELEGRAM_ALLOW_FROM="\"${uid}\""
-        echo "[OK] Telegram user ID: ${uid} (allowlist mode)"
+        TELEGRAM_ALLOW_FROM="\"${telegram_user_id}\""
+        echo "[OK] Telegram user ID: ${telegram_user_id} (allowlist mode)"
     else
         TELEGRAM_DM_POLICY="open"
         TELEGRAM_ALLOW_FROM="\"*\""
-        echo "[OK] Telegram: open policy (no telegram-userid.txt found)"
+        echo "[OK] Telegram: open policy (${userid_var} not set)"
     fi
 }
 

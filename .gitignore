@@ -1,8 +1,3 @@
-xai.txt
-telegram.txt
-telegram-userid.txt
+.env
 *.env
-files.zip
-files_2.zip
-review/
-review2/
+!.env.template
