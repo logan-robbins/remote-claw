@@ -261,8 +261,18 @@ runcmd:
   # ---- Purge light-locker (the 10-min screen lock trap) -----------------------
   - DEBIAN_FRONTEND=noninteractive apt-get purge -y light-locker light-locker-settings 2>&1 || true
 
+  # ---- Fix home directory ownership -------------------------------------------
+  # cloud-init's write_files runs BEFORE users_groups (module ordering in Ubuntu
+  # 24.04's cloud_init_modules). When write_files creates files under
+  # /home/azureuser/, it also creates the parent directory as root because the
+  # user doesn't exist yet. The Azure provisioner later creates azureuser but
+  # doesn't re-chown the pre-existing home dir. Without this fix, the xfce
+  # session crashes on first autologin because it can't write .ICEauthority,
+  # .Xauthority, or .config/ to a root-owned home dir.
+  - chown azureuser:azureuser /home/azureuser
+
   # ---- xfce session hint ------------------------------------------------------
-  - sudo -u azureuser bash -c 'echo xfce4-session > ~/.xsession'
+  - sudo -u azureuser bash -c 'echo xfce4-session > ~/.xsession && chmod 644 ~/.xsession'
 
   # ---- VNC password ----------------------------------------------------------
   - |
@@ -296,7 +306,7 @@ runcmd:
 
   # ---- Directory ownership for azureuser --------------------------------------
   - mkdir -p /home/azureuser/workspace /home/azureuser/.openclaw
-  - chown -R azureuser:azureuser /home/azureuser/.openclaw /home/azureuser/workspace /home/azureuser/.env
+  - chown -R azureuser:azureuser /home/azureuser
 
   # ---- Enable graphical target + lightdm --------------------------------------
   - systemctl set-default graphical.target
