@@ -1,0 +1,81 @@
+#cloud-config
+# Simple Azure Linux VM with persistent xfce4 desktop on :0, exposed via x11vnc.
+# Based on: https://learn.microsoft.com/en-us/azure/virtual-machines/linux/use-remote-desktop
+# (substituting x11vnc-attached-to-:0 for xrdp spawning :10+, so always-on
+# workloads remain observable across viewer disconnect/reconnect).
+#
+# Do NOT add a `users:` block — that replaces the default Azure admin user
+# (azureuser) and breaks SSH key injection.
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - xfce4
+  - xfce4-session
+  - lightdm
+  - x11vnc
+
+write_files:
+  - path: /etc/lightdm/lightdm.conf.d/50-autologin.conf
+    permissions: "0644"
+    content: |
+      [Seat:*]
+      autologin-user=azureuser
+      autologin-user-timeout=0
+      user-session=xfce
+
+  - path: /etc/systemd/system/x11vnc.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=x11vnc server attached to the lightdm autologin :0 session
+      After=lightdm.service
+      Wants=lightdm.service
+
+      [Service]
+      Type=simple
+      # Wait for the :0 X socket to actually exist before starting.
+      ExecStartPre=/bin/bash -c 'until [ -S /tmp/.X11-unix/X0 ]; do sleep 1; done'
+      ExecStart=/usr/bin/x11vnc \
+          -display :0 \
+          -auth guess \
+          -rfbport 5900 \
+          -rfbauth /etc/x11vnc.pass \
+          -forever \
+          -shared \
+          -noxdamage \
+          -o /var/log/x11vnc.log
+      Restart=on-failure
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  # Host-side firewall fully disabled (permissive posture, per project design)
+  - systemctl stop ufw || true
+  - systemctl disable ufw || true
+  - ufw --force disable || true
+
+  # xfce session hint (mirrors the MS tutorial's ~/.xsession step)
+  - sudo -u azureuser bash -c 'echo xfce4-session > ~/.xsession'
+
+  # Generate a random VNC password at first boot. Plaintext for the user to
+  # retrieve via ~/vnc-password.txt, obfuscated form for x11vnc at /etc/x11vnc.pass.
+  - |
+    VNC_PASS=$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 16)
+    echo "$VNC_PASS" > /home/azureuser/vnc-password.txt
+    chown azureuser:azureuser /home/azureuser/vnc-password.txt
+    chmod 600 /home/azureuser/vnc-password.txt
+    x11vnc -storepasswd "$VNC_PASS" /etc/x11vnc.pass
+    chmod 600 /etc/x11vnc.pass
+
+  # lightdm auto-login into :0 session at boot
+  - systemctl enable lightdm
+  - systemctl set-default graphical.target
+  - systemctl start lightdm
+
+  # x11vnc service attached to :0
+  - systemctl daemon-reload
+  - systemctl enable --now x11vnc

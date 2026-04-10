@@ -1,293 +1,68 @@
-# Remote Claw
+# remote-claw
 
-Deploy multiple independent [OpenClaw](https://github.com/openclaw/openclaw) AI agents on Azure, each with its own persistent data, all sharing a pre-baked image. Talk to them via Telegram. They can browse the web, run commands, control the desktop, and do whatever you need.
+A single-VM Azure deployment of Ubuntu 24.04 with a **persistent xfce4 desktop on `:0`, exposed over VNC**, so long-running workloads keep running whether or not anyone is connected. Based on the shape of Microsoft's tutorial https://learn.microsoft.com/en-us/azure/virtual-machines/linux/use-remote-desktop (with `x11vnc` substituted for `xrdp` so the viewer attaches to the same `:0` session the workload runs in).
 
-## What you get
+## What this is
 
-- **Multi-claw architecture**: run many independent agents (`main`, `research`, `trading`, ...) side-by-side, each with its own data disk and public IP
-- **Azure Compute Gallery** with versioned specialized images — fast deploys (~2-3 min) after initial bake
-- **Azure VM** per claw (8 vCPUs, 64 GiB RAM, Ubuntu 24.04)
-- **Full XFCE desktop** accessible via RDP with Chrome, Telegram Desktop, OpenClaw Dashboard, Agent Browser Viewer
-- **OpenClaw** with xAI Grok — full autonomy, no approval prompts
-- **Telegram** integration — optional allowlist locking
-- **Persistent data disks** that survive VM rebuilds
-- **AppArmor removed**, **Azure IMDS blocked** — agent has unrestricted control inside the VM but can't touch your Azure account
-- Chrome runs on a persistent virtual display (`Xvfb :99`) so the agent keeps working when you disconnect RDP
-- **`Agent Browser Viewer`** shortcut: watch the agent use Chrome in real time via VNC inside your RDP session
+One shell script, one cloud-init file. `az vm create` from stock Ubuntu 24.04, cloud-init installs `xfce4 + lightdm + x11vnc`. `lightdm` auto-logs in `azureuser` into an xfce session on `:0` at boot, and `x11vnc` attaches to that `:0` display so any VNC viewer sees exactly what's on the long-running session. Connect with any VNC client (macOS Finder has one built in).
+
+**Always-on behavior:** the `:0` session exists from the moment the VM boots, independent of whether anyone is viewing. Disconnect your VNC client, the session keeps running. Reconnect later, you see the same state.
+
+## Reproducible from any Azure account
+
+Everything in this repo is plain text. There are no pre-baked images, no gallery dependencies, no account-specific identifiers committed anywhere. Clone, `az login` to your own account, run `./deploy.sh`. Works in any subscription, any tenant, any region. The canonical source of truth is `cloud-init.yaml`.
+
+## Security posture
+
+**Wide open, on purpose.** The NSG allows all protocols and all ports from all sources. `ufw` is explicitly disabled on the host. VNC listens on `0.0.0.0:5900` protected only by a random 16-character password generated at first boot. This is a dev/experimentation VM, not a production host. Do not run anything sensitive on it.
 
 ## Prerequisites
 
-1. **Azure account** with an active subscription
-2. **xAI API key** from [console.x.ai](https://console.x.ai) (shared by all claws)
-3. **A Telegram bot token per claw** from @BotFather (Telegram allows only one active connection per bot, so each claw needs its own bot)
-4. *(Optional)* **Your Telegram user ID** from @userinfobot, per claw (locks that bot to your account only)
+- Azure CLI logged in (`az login`)
+- At least one SSH public key in `~/.ssh/*.pub`. `deploy.sh` auto-detects it; if you have multiple, it will prompt you to pick one. Override with `SSH_KEY_FILE=path/to/key.pub ./deploy.sh` to skip the prompt.
+- A VNC client. macOS has one built in (Finder > Go > Connect to Server > `vnc://<ip>:5900`). Linux: Remmina or `vncviewer`. Windows: RealVNC Viewer, TightVNC, or similar.
 
-## Setup (one time)
+## Deploy
 
-### Step 1: Install Azure CLI
+    ./deploy.sh
 
-```bash
-# macOS
-brew install azure-cli
+Environment overrides (all optional):
 
-# Linux
-curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
-```
+    RG=my-rg LOCATION=westus2 VM_NAME=my-desktop VM_SIZE=Standard_D4s_v5 ./deploy.sh
 
-### Step 2: Log into Azure
+## Connect
 
-```bash
-az login
-```
+1. Wait for cloud-init to finish (~5-10 min on first boot):
 
-### Step 3: Get your xAI API key
+       ssh azureuser@<ip> 'sudo cloud-init status --wait'
 
-Go to [console.x.ai](https://console.x.ai), create a new API key (starts with `xai-`).
+2. Retrieve the randomly-generated VNC password:
 
-### Step 4: Create a Telegram bot for each claw
+       ssh azureuser@<ip> 'cat ~/vnc-password.txt'
 
-Each claw needs its own Telegram bot. Telegram only allows one active connection per bot token, so sharing a token across claws would cause them to fight each other for messages.
+3. Open your VNC client and connect to `vnc://<ip>:5900`. Paste the password from step 2. You are now viewing the `:0` session.
 
-For each claw you plan to deploy:
+## Daily stop / start (keep disk, save money)
 
-1. Open Telegram and message **@BotFather**
-2. Send `/newbot`, pick a name and a unique username (e.g. `my_main_claw_bot`, `my_research_claw_bot`)
-3. Copy the token (looks like `123456789:ABCdefGHI...`)
-4. Save the token to a variable named `TELEGRAM_BOT_TOKEN_<CLAW>` in `.env` (next step)
+The VM is intended to be stopped when not in use. Always use **deallocate** (not stop) so compute billing stops. The OS disk and public IP persist across cycles — your installed software, files, and IP address are preserved.
 
-### Step 5: *(Optional)* Get your Telegram user ID
+    az vm deallocate -g rg-linux-desktop -n linux-desktop   # end of session
+    az vm start      -g rg-linux-desktop -n linux-desktop   # start of session
 
-If you want to lock the bots to your account only:
+## Destroy permanently
 
-1. Message **@userinfobot** on Telegram
-2. Copy your numeric ID (same ID works for all bots — it's your Telegram identity)
+    az group delete --name rg-linux-desktop --yes --no-wait
 
-You'll set this per claw in `.env` as `TELEGRAM_USER_ID_<CLAW>` in the next step. If you skip it, each bot responds to anyone who messages it.
+## Verification
 
-### Step 6: Clone and add your keys
+    ssh azureuser@<ip> 'sudo ss -tlnp | grep :5900'
 
-```bash
-git clone https://github.com/logan-robbins/remote-claw.git
-cd remote-claw
-cp .env.template .env
-```
+Expect `x11vnc` listening on `0.0.0.0:5900`.
 
-Edit `.env` and set:
-- `XAI_API_KEY` (shared by all claws)
-- `TELEGRAM_BOT_TOKEN_<CLAW>` for each claw you want to deploy (e.g. `TELEGRAM_BOT_TOKEN_MAIN`)
-- *(optional)* `TELEGRAM_USER_ID_<CLAW>` to lock a specific bot to your account
+    ssh azureuser@<ip> 'systemctl is-active lightdm x11vnc'
 
-**Variable name rules**: claw name uppercased, hyphens converted to underscores.
+Expect `active` twice.
 
-| Claw name | Env variable |
-|---|---|
-| `main` | `TELEGRAM_BOT_TOKEN_MAIN` |
-| `research` | `TELEGRAM_BOT_TOKEN_RESEARCH` |
-| `research-v2` | `TELEGRAM_BOT_TOKEN_RESEARCH_V2` |
+    ssh azureuser@<ip> 'pgrep -af xfce4-session'
 
-`.env` is gitignored and never committed.
-
-## Usage
-
-### Create your first claw
-
-```bash
-./deploy.sh main
-```
-
-- **First time ever**: takes ~15 min (bakes the image once, then deploys)
-- **Subsequent runs**: ~2-3 min (reuses the baked image)
-
-When it finishes it prints your RDP credentials. Open Microsoft Remote Desktop (macOS) or Remote Desktop Connection (Windows) and connect.
-
-### Use Telegram
-
-Open Telegram on your phone and send any message to the bot for a specific claw. OpenClaw responds immediately — no pairing or approval step. By default each bot responds to anyone who messages it; if you set `TELEGRAM_USER_ID_<CLAW>` in `.env`, that bot is locked to your account only and silently ignores everyone else.
-
-Each claw has its own bot, so you can talk to different claws independently.
-
-### Deploy a second claw
-
-Before creating a second claw, create a second Telegram bot via @BotFather and add its token to `.env` (e.g. `TELEGRAM_BOT_TOKEN_RESEARCH=...`). Then:
-
-```bash
-./deploy.sh research
-```
-
-Reuses the baked image — takes ~2-3 min. Gets its own public IP, its own data disk, its own Telegram bot, its own fresh OpenClaw state. Both claws run side-by-side independently.
-
-```bash
-./deploy.sh list
-```
-
-Shows all your claws with their status, image version, and public IP.
-
-### Upgrade a claw to a newer image
-
-When the bake recipe changes (new package, new version), bake a new image:
-
-```bash
-./deploy.sh --bake
-```
-
-This creates a new version (e.g. `1.0.1`). Existing claws keep running on their current version until you upgrade them:
-
-```bash
-./deploy.sh main --update
-```
-
-This destroys the VM + OS disk but **keeps the data disk**. The new VM boots from the latest image version. All your conversation history, memory, and workspace files are preserved.
-
-### Wipe data and start clean
-
-```bash
-./deploy.sh main --fresh
-```
-
-Destroys everything including the data disk, then recreates the claw with an empty data disk. Use this if you want to start from a blank slate.
-
-### Destroy one claw (others unaffected)
-
-```bash
-./deploy.sh main --destroy
-```
-
-### Destroy everything
-
-```bash
-./deploy.sh --destroy-all
-```
-
-Deletes the entire resource group: all claws, all data, all images, the gallery. You stop paying immediately.
-
-### Pin to a specific image version
-
-```bash
-./deploy.sh experimental --image 1.0.1
-```
-
-Normally claws use the latest version automatically. Use `--image` to pin to a specific version for testing or rollback.
-
-## Command reference
-
-### Claw operations (claw name required)
-
-| Command | What it does |
-|---|---|
-| `./deploy.sh <name>` | Create new claw (error if exists) |
-| `./deploy.sh <name> --update` | Rebuild VM from latest image, keep data disk |
-| `./deploy.sh <name> --fresh` | Rebuild VM + wipe data disk |
-| `./deploy.sh <name> --destroy` | Delete claw entirely |
-| `./deploy.sh <name> --image <ver>` | Pin to specific image version |
-
-### No-claw operations
-
-| Command | What it does |
-|---|---|
-| `./deploy.sh` | Show help + list existing claws (never modifies) |
-| `./deploy.sh list` | List all claws with status, image, IP |
-| `./deploy.sh images` | List all image versions in the gallery |
-| `./deploy.sh --bake` | Bake a new image version |
-| `./deploy.sh --destroy-all` | Nuclear — delete the entire resource group |
-
-## How it works
-
-### The image is shared
-
-All claws deploy from the same pre-baked image in an Azure Compute Gallery. The bake happens once and takes ~10 min (install packages, Node.js, OpenClaw, Chrome, Telegram Desktop, Playwright, disable AppArmor, block IMDS). After that, every deploy is ~2-3 min because the VM boots straight from the image; `deploy.sh` then SSHes in and runs a small init script that mounts the data disk, writes your secrets, and starts services.
-
-### Image versioning
-
-Images are versioned `1.0.0`, `1.0.1`, `1.0.2`, ... Each `./deploy.sh --bake` creates a new version. The gallery keeps the **latest 3 versions**, older ones are auto-deleted. You can rollback by using `--image <version>`.
-
-### Per-claw resources
-
-Each claw owns:
-- A VM (`claw-<name>-vm`)
-- A data disk (`claw-<name>-data`, 64 GB)
-- A NIC, a public IP, a subnet
-
-Shared across all claws:
-- Virtual network (`vnet-openclaw`, /16)
-- NSG (`nsg-openclaw`, all ports open)
-- Compute Gallery + images
-
-### Data persistence
-
-Each claw's data disk holds its OpenClaw memory, conversations, config, and workspace files. The VM is stateless — it can be destroyed and recreated freely. Data lives at `/data/openclaw/` (symlinked to `~/.openclaw/`) on the VM.
-
-```
-VM (per-claw, ephemeral)          Data Disk (per-claw, persistent)
-  ├── Ubuntu 24.04                  └── /data/
-  ├── XFCE, xrdp, Chrome                ├── openclaw/    -> ~/.openclaw
-  ├── OpenClaw binary                    │   ├── .env
-  └── Telegram Desktop                   │   ├── openclaw.json
-                                          │   ├── exec-approvals.json
-                                          │   ├── memory/
-                                          │   └── conversations/
-                                          └── workspace/   -> ~/workspace
-```
-
-### Display decoupling
-
-The agent's Chrome runs on a persistent virtual display (`Xvfb :99`) that is completely independent of RDP. This means:
-- **Chrome never crashes** when you disconnect RDP
-- **You can close RDP any time** — the agent keeps working
-- **Telegram keeps working** whether you're connected or not
-
-To **watch** the agent's browser from inside your RDP session, double-click **Agent Browser Viewer** — it opens a VNC viewer connected to `Xvfb :99` where Chrome lives.
-
-### Security model
-
-The agent has **full control inside the VM** — it can run any command, read any file, control the browser, and access the network. No sandboxing, no approval prompts. AppArmor is purged at bake time.
-
-The agent **cannot touch your Azure account**:
-- Azure IMDS (`169.254.169.254`) is blocked via iptables (persisted across reboots), so no process can acquire Azure tokens
-- No Azure CLI is installed on the VM
-- No Azure credentials exist on the VM
-- The VM has no managed identity
-
-Each claw's Telegram bot can be locked to your user ID via `TELEGRAM_USER_ID_<CLAW>` in `.env`. The gateway UI is bound to localhost (only reachable from inside the VM via RDP).
-
-## Connect via RDP
-
-| Platform | Client |
-|---|---|
-| macOS | [Microsoft Remote Desktop](https://apps.apple.com/app/microsoft-remote-desktop/id1295203466) |
-| Windows | Built-in (`mstsc`) |
-| Linux | `remmina` or `xfreerdp` |
-
-## Files
-
-| File | Purpose |
-|---|---|
-| `deploy.sh` | Multi-claw CLI |
-| `cloud-init-bake.yaml` | Full software install (runs once per bake) |
-| `runtime-init.sh` | Runtime config template, SSH-injected per deploy with secrets |
-| `.env.template` | Template for your secrets |
-| `.env` | Your actual secrets — xAI key, Telegram bot token, optional user ID (gitignored) |
-
-## VM Details
-
-| Spec | Value |
-|---|---|
-| Size | Standard_E8s_v3 (8 vCPUs, 64 GiB RAM) |
-| OS | Ubuntu 24.04 LTS |
-| Desktop | XFCE on X11 |
-| Remote access | xrdp on port 3389 |
-| OS Disk | 256 GB Premium SSD |
-| Data Disk | 64 GB Premium SSD (per-claw, persistent) |
-| Region | East US (zone 3) |
-| Firewall | All ports open (inbound + outbound) |
-| AI model | xAI Grok 4 |
-| Agent | OpenClaw (latest, Node.js 24) |
-| Browser | Google Chrome (headed on Xvfb :99) |
-| Azure IMDS | Blocked |
-
-## Quota Note
-
-Azure subscriptions have default vCPU quotas. The default is 10 cores in the `Standard ESv3 Family` — enough for one claw. If you want to run multiple claws simultaneously, request a quota increase in the [Azure portal](https://portal.azure.com) under **Quotas > Compute**.
-
-## SSH key caveat
-
-The baked image **embeds the SSH public key** from the machine where `./deploy.sh --bake` was run. All claws deployed from that image inherit the same key. If you rotate your local SSH keypair, you'll need to `./deploy.sh --bake` a new image and then `./deploy.sh <claw> --update` each existing claw to pick up the new key.
+Expect at least one running `xfce4-session` process owned by `azureuser`, confirming the lightdm auto-login landed.
