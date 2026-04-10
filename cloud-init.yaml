@@ -88,7 +88,7 @@ write_files:
   # Values below come from ${VAR} substitution in deploy.sh (envsubst over .env).
   # The file is azureuser-owned and 0600-perms so nothing else can read it.
   - path: /home/azureuser/.env
-    owner: azureuser:azureuser
+    # ownership set by runcmd chown after user creation
     permissions: "0600"
     content: |
       XAI_API_KEY=${XAI_API_KEY}
@@ -101,7 +101,7 @@ write_files:
   # ${TELEGRAM_DM_POLICY} and ${TELEGRAM_ALLOW_FROM} are computed by deploy.sh
   # based on whether TELEGRAM_USER_ID is set. See deploy.sh for the derivation.
   - path: /home/azureuser/.openclaw/openclaw.json
-    owner: azureuser:azureuser
+    # ownership set by runcmd chown after user creation
     permissions: "0644"
     content: |
       {
@@ -188,7 +188,7 @@ write_files:
 
   # ---- OpenClaw exec approvals (full autonomy for the dev agent) --------------
   - path: /home/azureuser/.openclaw/exec-approvals.json
-    owner: azureuser:azureuser
+    # ownership set by runcmd chown after user creation
     permissions: "0644"
     content: |
       {
@@ -214,7 +214,7 @@ write_files:
   # Base64-encoded at deploy time from the user's local SOUL.md (if present)
   # or from a minimal placeholder (if absent). See deploy.sh.
   - path: /home/azureuser/.openclaw/SOUL.md
-    owner: azureuser:azureuser
+    # ownership set by runcmd chown after user creation
     permissions: "0644"
     encoding: base64
     content: ${SOUL_MD_BASE64}
