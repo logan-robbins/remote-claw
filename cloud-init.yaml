@@ -1,8 +1,17 @@
 #cloud-config
-# Simple Azure Linux VM with persistent xfce4 desktop on :0, exposed via x11vnc.
-# Based on: https://learn.microsoft.com/en-us/azure/virtual-machines/linux/use-remote-desktop
-# (substituting x11vnc-attached-to-:0 for xrdp spawning :10+, so always-on
-# workloads remain observable across viewer disconnect/reconnect).
+# Azure Ubuntu 24.04 VM with a persistent xfce4 desktop on :0, exposed via x11vnc,
+# preinstalled with OpenClaw + Google Chrome + Telegram Desktop, and auto-starting
+# an OpenClaw gateway bound to Telegram at boot.
+#
+# Secrets (XAI/OpenAI/BrightData/Telegram tokens and SOUL.md base64 body) are
+# substituted via envsubst BEFORE `az vm create` runs. See deploy.sh for the
+# substitution logic. cloud-init.yaml itself never contains secrets -- it
+# contains ${VAR} placeholders only.
+#
+# Based on the shape of the Microsoft tutorial
+#   https://learn.microsoft.com/en-us/azure/virtual-machines/linux/use-remote-desktop
+# and on OpenClaw's 2026 docs
+#   https://docs.openclaw.ai/tools/browser-linux-troubleshooting
 #
 # Do NOT add a `users:` block -- that replaces the default Azure admin user
 # (azureuser) and breaks SSH key injection.
@@ -11,12 +20,22 @@ package_update: true
 package_upgrade: true
 
 packages:
+  # Desktop + remote access
   - xfce4
   - xfce4-session
   - lightdm
   - x11vnc
+  # Fetch/build helpers used by the Phase 2 install step
+  - curl
+  - wget
+  - ca-certificates
+  - gnupg
+  - jq
+  - git
+  - build-essential
 
 write_files:
+  # ---- lightdm auto-login into an xfce session on :0 --------------------------
   - path: /etc/lightdm/lightdm.conf.d/50-autologin.conf
     permissions: "0644"
     content: |
@@ -25,6 +44,7 @@ write_files:
       autologin-user-timeout=0
       user-session=xfce
 
+  # ---- x11vnc service attached to :0 ------------------------------------------
   - path: /etc/systemd/system/x11vnc.service
     permissions: "0644"
     content: |
@@ -35,7 +55,6 @@ write_files:
 
       [Service]
       Type=simple
-      # Wait for the :0 X socket to actually exist before starting.
       ExecStartPre=/bin/bash -c 'until [ -S /tmp/.X11-unix/X0 ]; do sleep 1; done'
       ExecStart=/usr/bin/x11vnc \
           -display :0 \
@@ -52,11 +71,7 @@ write_files:
       [Install]
       WantedBy=multi-user.target
 
-  # Disable the X screensaver and DPMS at every xfce session start. Without
-  # this, the built-in 10-minute idle timer eventually blanks :0 and, combined
-  # with light-locker (purged below), triggers lightdm to lock the seat and
-  # spawn a greeter on :1 -- which leaves VNC viewers looking at a stale black
-  # :0 frame. Belt-and-suspenders with the light-locker purge.
+  # ---- Disable xfce screen blanking/DPMS (prevents light-locker trap) ---------
   - path: /etc/xdg/autostart/disable-blanking.desktop
     permissions: "0644"
     content: |
@@ -69,24 +84,187 @@ write_files:
       X-GNOME-Autostart-enabled=true
       NoDisplay=true
 
+  # ---- Secrets env file for OpenClaw gateway ----------------------------------
+  # Values below come from ${VAR} substitution in deploy.sh (envsubst over .env).
+  # The file is azureuser-owned and 0600-perms so nothing else can read it.
+  - path: /home/azureuser/.env
+    owner: azureuser:azureuser
+    permissions: "0600"
+    content: |
+      XAI_API_KEY=${XAI_API_KEY}
+      OPENAI_API_KEY=${OPENAI_API_KEY}
+      BRIGHTDATA_API_TOKEN=${BRIGHTDATA_API_TOKEN}
+      TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_USER_ID=${TELEGRAM_USER_ID}
+
+  # ---- OpenClaw config --------------------------------------------------------
+  # ${TELEGRAM_DM_POLICY} and ${TELEGRAM_ALLOW_FROM} are computed by deploy.sh
+  # based on whether TELEGRAM_USER_ID is set. See deploy.sh for the derivation.
+  - path: /home/azureuser/.openclaw/openclaw.json
+    owner: azureuser:azureuser
+    permissions: "0644"
+    content: |
+      {
+        "agents": {
+          "defaults": {
+            "model": {
+              "primary": "xai/grok-4"
+            },
+            "workspace": "/home/azureuser/workspace",
+            "maxConcurrent": 4,
+            "sandbox": {
+              "mode": "off"
+            },
+            "elevatedDefault": "full"
+          },
+          "list": [
+            {
+              "id": "main",
+              "default": true
+            }
+          ]
+        },
+
+        "models": {
+          "mode": "merge",
+          "providers": {
+            "xai": {
+              "baseUrl": "https://api.x.ai/v1",
+              "api": "openai-completions",
+              "models": [
+                {
+                  "id": "grok-4",
+                  "name": "Grok 4",
+                  "reasoning": false,
+                  "input": ["text"],
+                  "contextWindow": 200000,
+                  "maxTokens": 8192
+                }
+              ]
+            }
+          }
+        },
+
+        "channels": {
+          "telegram": {
+            "enabled": true,
+            "dmPolicy": "${TELEGRAM_DM_POLICY}",
+            "allowFrom": [${TELEGRAM_ALLOW_FROM}],
+            "groupPolicy": "disabled",
+            "streaming": "partial"
+          }
+        },
+
+        "gateway": {
+          "port": 18789,
+          "mode": "local",
+          "bind": "loopback"
+        },
+
+        "tools": {
+          "exec": {
+            "security": "full",
+            "ask": "off",
+            "backgroundMs": 10000,
+            "timeoutSec": 1800
+          },
+          "web": {
+            "search": { "enabled": true },
+            "fetch": { "enabled": true }
+          }
+        },
+
+        "browser": {
+          "enabled": true,
+          "executablePath": "/usr/bin/google-chrome-stable",
+          "headless": false,
+          "noSandbox": true
+        },
+
+        "logging": {
+          "redactSensitive": "tools"
+        }
+      }
+
+  # ---- OpenClaw exec approvals (full autonomy for the dev agent) --------------
+  - path: /home/azureuser/.openclaw/exec-approvals.json
+    owner: azureuser:azureuser
+    permissions: "0644"
+    content: |
+      {
+        "version": 1,
+        "defaults": {
+          "security": "full",
+          "ask": "off",
+          "askFallback": "full"
+        },
+        "agents": {
+          "main": {
+            "security": "full",
+            "ask": "off",
+            "askFallback": "full",
+            "allowlist": [
+              { "pattern": "**" }
+            ]
+          }
+        }
+      }
+
+  # ---- SOUL.md (agent identity) -----------------------------------------------
+  # Base64-encoded at deploy time from the user's local SOUL.md (if present)
+  # or from a minimal placeholder (if absent). See deploy.sh.
+  - path: /home/azureuser/.openclaw/SOUL.md
+    owner: azureuser:azureuser
+    permissions: "0644"
+    encoding: base64
+    content: ${SOUL_MD_BASE64}
+
+  # ---- OpenClaw gateway systemd unit ------------------------------------------
+  # Runs as azureuser, on display :0, reading secrets from ~/.env, and depends
+  # on x11vnc (which depends on lightdm) so it only fires after the desktop
+  # session is fully up.
+  - path: /etc/systemd/system/openclaw-gateway.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=OpenClaw Gateway (auto-starts at boot, binds to Telegram)
+      After=network-online.target lightdm.service x11vnc.service
+      Wants=network-online.target lightdm.service x11vnc.service
+      ConditionPathExists=/home/azureuser/.openclaw/openclaw.json
+      ConditionPathExists=/home/azureuser/.env
+
+      [Service]
+      Type=simple
+      User=azureuser
+      Group=azureuser
+      WorkingDirectory=/home/azureuser
+      Environment=HOME=/home/azureuser
+      Environment=DISPLAY=:0
+      Environment=XAUTHORITY=/home/azureuser/.Xauthority
+      EnvironmentFile=/home/azureuser/.env
+      ExecStartPre=/bin/bash -c 'until [ -S /tmp/.X11-unix/X0 ]; do sleep 1; done'
+      ExecStart=/usr/bin/openclaw gateway
+      Restart=always
+      RestartSec=10
+      StandardOutput=journal
+      StandardError=journal
+
+      [Install]
+      WantedBy=multi-user.target
+
 runcmd:
-  # Host-side firewall fully disabled (permissive posture, per project design)
+  # ---- Host-side firewall fully disabled --------------------------------------
   - systemctl stop ufw || true
   - systemctl disable ufw || true
   - ufw --force disable || true
 
-  # Purge light-locker. It ships as a dependency of lightdm on Ubuntu and its
-  # ONLY job is to lock the seat when the X screensaver fires, which on xfce's
-  # default 10-minute idle timer means a VNC viewer ends up stuck looking at a
-  # locked screen 10 minutes after every boot. For an always-on headless desktop
-  # this is strictly anti-feature -- remove it.
+  # ---- Purge light-locker (the 10-min screen lock trap) -----------------------
   - DEBIAN_FRONTEND=noninteractive apt-get purge -y light-locker light-locker-settings 2>&1 || true
 
-  # xfce session hint (mirrors the MS tutorial's ~/.xsession step)
+  # ---- xfce session hint ------------------------------------------------------
   - sudo -u azureuser bash -c 'echo xfce4-session > ~/.xsession'
 
-  # Generate a random VNC password at first boot. Plaintext for the user to
-  # retrieve via ~/vnc-password.txt, obfuscated form for x11vnc at /etc/x11vnc.pass.
+  # ---- VNC password ----------------------------------------------------------
   - |
     VNC_PASS=$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 16)
     echo "$VNC_PASS" > /home/azureuser/vnc-password.txt
@@ -95,11 +273,39 @@ runcmd:
     x11vnc -storepasswd "$VNC_PASS" /etc/x11vnc.pass
     chmod 600 /etc/x11vnc.pass
 
-  # lightdm auto-login into :0 session at boot
-  - systemctl enable lightdm
+  # ---- Node.js 24 (OpenClaw's runtime) ----------------------------------------
+  - curl -fsSL https://deb.nodesource.com/setup_24.x | bash -
+  - DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs
+
+  # ---- OpenClaw (global npm) --------------------------------------------------
+  - npm install -g openclaw@latest
+
+  # ---- Google Chrome .deb (per 2026 OpenClaw Linux troubleshooting docs) ------
+  # snap Chromium is explicitly broken for OpenClaw's CDP integration because
+  # of snap AppArmor confinement. The .deb is the recommended path.
+  - wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb -O /tmp/chrome.deb
+  - DEBIAN_FRONTEND=noninteractive apt-get install -y /tmp/chrome.deb
+  - rm /tmp/chrome.deb
+
+  # ---- Telegram Desktop (official tarball, not snap) --------------------------
+  - wget -q https://telegram.org/dl/desktop/linux -O /tmp/telegram.tar.xz
+  - mkdir -p /opt
+  - tar -xJf /tmp/telegram.tar.xz -C /opt/
+  - rm /tmp/telegram.tar.xz
+  - ln -sf /opt/Telegram/Telegram /usr/local/bin/telegram-desktop
+
+  # ---- Directory ownership for azureuser --------------------------------------
+  - mkdir -p /home/azureuser/workspace /home/azureuser/.openclaw
+  - chown -R azureuser:azureuser /home/azureuser/.openclaw /home/azureuser/workspace /home/azureuser/.env
+
+  # ---- Enable graphical target + lightdm --------------------------------------
   - systemctl set-default graphical.target
+  - systemctl enable lightdm
   - systemctl start lightdm
 
-  # x11vnc service attached to :0
+  # ---- x11vnc service attached to :0 ------------------------------------------
   - systemctl daemon-reload
   - systemctl enable --now x11vnc
+
+  # ---- OpenClaw gateway (auto-starts at every boot) ---------------------------
+  - systemctl enable --now openclaw-gateway
