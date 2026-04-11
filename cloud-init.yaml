@@ -23,8 +23,16 @@ packages:
   # Desktop + remote access
   - xfce4
   - xfce4-session
+  - xfce4-goodies
   - lightdm
   - x11vnc
+  - xserver-xorg-video-dummy
+  # GUI automation tools (xdotool, wmctrl, scrot, xclip, x11-utils)
+  - xdotool
+  - wmctrl
+  - scrot
+  - xclip
+  - x11-utils
   # Fetch/build helpers used by the Phase 2 install step
   - curl
   - wget
@@ -49,7 +57,7 @@ write_files:
     permissions: "0644"
     content: |
       [Unit]
-      Description=x11vnc server attached to the lightdm autologin :0 session
+      Description=x11vnc server attached to the lightdm autologin :0 session (view-only)
       After=lightdm.service
       Wants=lightdm.service
 
@@ -63,6 +71,7 @@ write_files:
           -rfbauth /etc/x11vnc.pass \
           -forever \
           -shared \
+          -viewonly \
           -noxdamage \
           -o /var/log/x11vnc.log
       Restart=on-failure
@@ -70,6 +79,31 @@ write_files:
 
       [Install]
       WantedBy=multi-user.target
+
+  # ---- Dummy Xorg config (stable headless desktop on Azure) -------------------
+  - path: /etc/X11/xorg.conf.d/99-dummy.conf
+    permissions: "0644"
+    content: |
+      Section "Device"
+          Identifier "dummy_vga"
+          Driver "dummy"
+          VideoRam 256000
+      EndSection
+      Section "Screen"
+          Identifier "dummy_screen"
+          Device "dummy_vga"
+          Monitor "dummy_monitor"
+          DefaultDepth 24
+          SubSection "Display"
+              Depth 24
+              Modes "1920x1080" "1280x1024" "1024x768"
+          EndSubSection
+      EndSection
+      Section "Monitor"
+          Identifier "dummy_monitor"
+          HorizSync   1-200
+          VertRefresh 1-200
+      EndSection
 
   # ---- Disable xfce screen blanking/DPMS (prevents light-locker trap) ---------
   - path: /etc/xdg/autostart/disable-blanking.desktop
@@ -271,6 +305,11 @@ runcmd:
   # .Xauthority, or .config/ to a root-owned home dir.
   - chown azureuser:azureuser /home/azureuser
 
+  # ---- Full unrestricted sudo for the agent (literal 100% control) -----------
+  - |
+    echo "azureuser ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/azureuser-full
+    chmod 440 /etc/sudoers.d/azureuser-full
+
   # ---- xfce session hint ------------------------------------------------------
   - sudo -u azureuser bash -c 'echo xfce4-session > ~/.xsession && chmod 644 ~/.xsession'
 
@@ -283,12 +322,15 @@ runcmd:
     x11vnc -storepasswd "$VNC_PASS" /etc/x11vnc.pass
     chmod 600 /etc/x11vnc.pass
 
-  # ---- Node.js 24 (OpenClaw's runtime) ----------------------------------------
-  - curl -fsSL https://deb.nodesource.com/setup_24.x | bash -
-  - DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs
-
-  # ---- OpenClaw (global npm) --------------------------------------------------
-  - npm install -g openclaw@latest
+  # ---- Node.js 24 + OpenClaw --------------------------------------------------
+  # The system nodejs 18.x may get pulled in as a dependency (node-acorn →
+  # libnode109 chain). Purge it first so the nodesource 24.x install takes hold
+  # and provides npm.
+  - |
+    apt-get remove --purge -y nodejs libnode-dev 2>/dev/null || true
+    curl -fsSL https://deb.nodesource.com/setup_24.x | bash -
+    DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs
+    npm install -g openclaw@latest
 
   # ---- Google Chrome .deb (per 2026 OpenClaw Linux troubleshooting docs) ------
   # snap Chromium is explicitly broken for OpenClaw's CDP integration because
@@ -296,13 +338,6 @@ runcmd:
   - wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb -O /tmp/chrome.deb
   - DEBIAN_FRONTEND=noninteractive apt-get install -y /tmp/chrome.deb
   - rm /tmp/chrome.deb
-
-  # ---- Telegram Desktop (official tarball, not snap) --------------------------
-  - wget -q https://telegram.org/dl/desktop/linux -O /tmp/telegram.tar.xz
-  - mkdir -p /opt
-  - tar -xJf /tmp/telegram.tar.xz -C /opt/
-  - rm /tmp/telegram.tar.xz
-  - ln -sf /opt/Telegram/Telegram /usr/local/bin/telegram-desktop
 
   # ---- Directory ownership for azureuser --------------------------------------
   - mkdir -p /home/azureuser/workspace /home/azureuser/.openclaw

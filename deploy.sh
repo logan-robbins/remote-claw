@@ -15,6 +15,9 @@ LOCATION="${LOCATION:-eastus}"
 VM_NAME="${VM_NAME:-linux-desktop}"
 VM_SIZE="${VM_SIZE:-Standard_D2s_v3}"
 ADMIN_USER="${ADMIN_USER:-azureuser}"
+VNET_NAME="${VNET_NAME:-${RG}-vnet}"
+SUBNET_NAME="${SUBNET_NAME:-default}"
+NSG_NAME="${NSG_NAME:-${RG}-nsg}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLOUD_INIT="${SCRIPT_DIR}/cloud-init.yaml"
@@ -188,6 +191,39 @@ EOF
     echo "Wrote $VM_STATE_FILE" >&2
 }
 
+# --- Shared infrastructure (idempotent, reused across VMs) -------------------
+# Creates the resource group, virtual network, and NSG only if they don't
+# already exist. Multiple VMs can share the same RG/VNet/NSG.
+ensure_shared_infra() {
+    echo "Ensuring resource group $RG in $LOCATION..."
+    az group create --name "$RG" --location "$LOCATION" --output none
+
+    if ! az network vnet show -g "$RG" -n "$VNET_NAME" &>/dev/null; then
+        echo "Creating virtual network $VNET_NAME..."
+        az network vnet create -g "$RG" -n "$VNET_NAME" \
+            --address-prefix 10.0.0.0/16 \
+            --subnet-name "$SUBNET_NAME" \
+            --subnet-prefix 10.0.0.0/24 \
+            --output none
+    else
+        echo "Virtual network $VNET_NAME already exists."
+    fi
+
+    if ! az network nsg show -g "$RG" -n "$NSG_NAME" &>/dev/null; then
+        echo "Creating NSG $NSG_NAME (wide open)..."
+        az network nsg create -g "$RG" -n "$NSG_NAME" --output none
+        az network nsg rule create -g "$RG" --nsg-name "$NSG_NAME" \
+            -n AllowAll --priority 100 \
+            --access Allow --direction Inbound \
+            --protocol '*' --source-address-prefixes '*' \
+            --source-port-ranges '*' --destination-port-ranges '*' \
+            --destination-address-prefixes '*' \
+            --output none
+    else
+        echo "NSG $NSG_NAME already exists."
+    fi
+}
+
 # --- Preflight checks ---------------------------------------------------------
 if ! command -v envsubst >/dev/null 2>&1; then
     echo "ERROR: envsubst not found. Install with:  brew install gettext" >&2
@@ -206,8 +242,7 @@ load_soul_md
 RENDERED_CLOUD_INIT=$(render_cloud_init)
 trap 'rm -f "$RENDERED_CLOUD_INIT"' EXIT
 
-echo "Creating resource group $RG in $LOCATION..."
-az group create --name "$RG" --location "$LOCATION" --output none
+ensure_shared_infra
 
 echo "Creating VM $VM_NAME ($VM_SIZE)..."
 az vm create \
@@ -218,11 +253,11 @@ az vm create \
     --admin-username "$ADMIN_USER" \
     --ssh-key-values "$SSH_KEY_FILE" \
     --custom-data "$RENDERED_CLOUD_INIT" \
+    --vnet-name "$VNET_NAME" \
+    --subnet "$SUBNET_NAME" \
+    --nsg "$NSG_NAME" \
     --public-ip-sku Standard \
     --output none
-
-echo "Opening NSG wide open (all protocols, all ports, all sources)..."
-az vm open-port --resource-group "$RG" --name "$VM_NAME" --port '*' --priority 100 --output none
 
 IP=$(az vm show -d -g "$RG" -n "$VM_NAME" --query publicIps -o tsv)
 
@@ -231,12 +266,13 @@ IP=$(az vm show -d -g "$RG" -n "$VM_NAME" --query publicIps -o tsv)
 # password file may not exist yet -- we retry a few times and degrade to
 # "retrieve manually later" if it's not ready.
 echo "Waiting for SSH + VNC password..."
+PRIVATE_KEY="${SSH_KEY_FILE%.pub}"
 VNC_PASS=""
-for i in $(seq 1 30); do
-    if ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+for i in $(seq 1 40); do
+    if ssh -i "$PRIVATE_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
         -o BatchMode=yes -o ConnectTimeout=5 \
         "${ADMIN_USER}@${IP}" "test -f ~/vnc-password.txt" 2>/dev/null; then
-        VNC_PASS=$(ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+        VNC_PASS=$(ssh -i "$PRIVATE_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
             -o BatchMode=yes "${ADMIN_USER}@${IP}" "cat ~/vnc-password.txt" 2>/dev/null || echo "")
         if [[ -n "$VNC_PASS" ]]; then
             break
@@ -245,7 +281,7 @@ for i in $(seq 1 30); do
     sleep 5
 done
 if [[ -z "$VNC_PASS" ]]; then
-    VNC_PASS="<not-ready-yet:  ssh ${ADMIN_USER}@${IP} 'cat ~/vnc-password.txt'>"
+    VNC_PASS="<not-ready-yet:  ssh -i ${PRIVATE_KEY} ${ADMIN_USER}@${IP} 'cat ~/vnc-password.txt'>"
 fi
 
 write_vm_state "$IP" "$VNC_PASS"
@@ -254,9 +290,11 @@ cat <<EOF
 
 [OK] VM deployed at $IP
 
-Phase 2 install (openclaw + chrome + telegram + autostart gateway) is running
-in the background. cloud-init typically takes 5-10 min the first time. Watch:
-  ssh ${ADMIN_USER}@${IP} 'sudo cloud-init status --wait'
+OpenClaw has 100% unrestricted control (passwordless sudo, full exec rights).
+VNC is view-only -- you can watch everything the agent does without interrupting it.
+
+cloud-init is still running (~5-10 min first time). Watch:
+  ssh -i ${PRIVATE_KEY} ${ADMIN_USER}@${IP} 'sudo cloud-init status --wait'
 
 When cloud-init reports 'done', message your Telegram bot and the agent
 should respond. No further setup needed.
@@ -264,12 +302,12 @@ should respond. No further setup needed.
 Connection info (also written to .vm-state):
   VNC:  vnc://${IP}:5900
   VNC password:  ${VNC_PASS}
-  SSH:  ssh ${ADMIN_USER}@${IP}
+  SSH:  ssh -i ${PRIVATE_KEY} ${ADMIN_USER}@${IP}
 
 Daily lifecycle (disk and IP persist across stop/start):
   Stop (billing off):  az vm deallocate -g $RG -n $VM_NAME
   Start (billing on):  az vm start      -g $RG -n $VM_NAME
 
-To destroy everything permanently:
-  az group delete --name $RG --yes --no-wait
+To destroy VM only:  az vm delete -g $RG -n $VM_NAME --yes
+To destroy everything (RG + all VMs):  az group delete --name $RG --yes --no-wait
 EOF
