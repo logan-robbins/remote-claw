@@ -1,14 +1,26 @@
-# OpenClawOps
+# OpenClawps
 
-ClawOps for OpenClaw agents on Azure. Continuously roll out system updates across a fleet of autonomous agents while preserving each agent's identity, workspace, credentials, and running state.
+Ops for Claws. Deploy, version, and roll out updates to fleets of autonomous [OpenClaw](https://openclaw.ai) agents while preserving each agent's identity, workspace, and running state.
 
-The pattern: **image = versioned system runtime, detachable disk = durable agent state, boot script = late binding**. Update the image, swap the VM underneath, the agent picks up where it left off.
+## Why a desktop
+
+Every claw runs a full graphical desktop (xfce4 on `:0`, exposed over VNC). This is intentional. As computer-use capabilities ship across model providers, we want agents running on a real desktop with a real browser, testing those capabilities continuously in the environment they're designed for. The desktop isn't a legacy artifact -- it's the test surface.
+
+## Why deliberately permissive
+
+The default run mode is wide open: sandbox off, full exec rights, passwordless sudo, all ports exposed. The agent operates as if it were a human at the keyboard. Containment is at the infrastructure boundary (isolated resource group, scoped credentials), not inside the guest.
+
+This is the starting point, not the end state. We ship the permissive mode first because it's the one that works today and unblocks everything else. The project is structured so the community can contribute more secure run modes (restricted exec policies, network egress controls, hardened images, read-only root filesystems) without breaking the core lifecycle. If you have opinions about how agents should be sandboxed, this is the place to build it.
 
 ## How it works
 
-Each claw is an always-on Ubuntu 24.04 VM with a persistent xfce4 desktop, OpenClaw gateway, Telegram bot, Chrome, and Claude Code. The VM runs whether or not anyone is watching. Two SSH or VNC sessions see the same live desktop.
+**Image = versioned system runtime.** OS, packages, OpenClaw, Chrome, Claude Code, boot logic -- baked once, stamped out repeatedly.
 
-The system layer (OS, packages, OpenClaw, boot logic) is baked into a versioned image. Everything that makes a claw *that specific claw* (config, secrets, workspace, memory, session state) lives on a detachable Azure managed disk. Upgrades swap the image; the data disk rides along.
+**Data disk = durable agent state.** Config, secrets, workspace, memory, session state -- survives VM replacement on a detachable Azure managed disk.
+
+**Boot script = late binding.** Mounts the disk, seeds defaults on first run, repairs symlinks, applies migrations, starts services.
+
+Update the image, swap the VM underneath, the agent picks up where it left off.
 
 ## Lifecycle
 
@@ -19,7 +31,7 @@ cp .env.template .env && vi .env
 ./deploy.sh scratch
 ```
 
-Full install from stock Ubuntu. ~10 min. When done, message the Telegram bot.
+Full install from stock Ubuntu 24.04. ~10 min. When done, message the Telegram bot.
 
 ### Bake the image
 
@@ -41,10 +53,7 @@ ENV_FILE=.env.bob   VM_NAME=bob   ./deploy.sh
 ### Roll out updates
 
 ```bash
-# Bake a new version from an updated VM
 ./deploy.sh bake 2.0.0
-
-# Upgrade a claw in place -- data disk reattaches, state preserved
 ./deploy.sh upgrade alice --image 2.0.0
 ```
 
@@ -83,11 +92,15 @@ az vm start      -g rg-linux-desktop -n alice   # everything resumes
 
 Nothing reinstalls. Systemd services auto-start. Data disk stays attached.
 
-## Security posture
+## Contributing
 
-Deliberately permissive inside the VM. OpenClaw runs unrestricted: sandbox off, full exec rights, passwordless sudo. The agent operates as if it were a human at the keyboard.
+The architecture is designed to be extended. Areas where contributions would be valuable:
 
-Containment is at the infrastructure boundary: isolated resource group, scoped credentials, narrow managed identity. The VM is not the security boundary -- Azure is.
+- **Secure run modes** -- restricted exec policies, network egress controls, read-only root
+- **Cloud providers** -- GCP, AWS, bare metal adaptations
+- **Image variants** -- minimal (no desktop), GPU-enabled, ARM
+- **Channels** -- Slack, Discord, Matrix adapters beyond Telegram
+- **Orchestration** -- fleet-wide rollouts, health dashboards, auto-scaling
 
 ## Destroy
 
@@ -95,3 +108,7 @@ Containment is at the infrastructure boundary: isolated resource group, scoped c
 az vm delete -g rg-linux-desktop -n alice --yes                    # one claw
 az group delete --name rg-linux-desktop --yes --no-wait            # everything
 ```
+
+## License
+
+MIT. See [LICENSE](LICENSE).
