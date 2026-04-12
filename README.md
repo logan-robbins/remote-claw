@@ -1,114 +1,81 @@
 # OpenClawps
 
-Ops for Claws. Deploy, version, and roll out updates to fleets of autonomous [OpenClaw](https://openclaw.ai) agents while preserving each agent's identity, workspace, and running state.
+Ops for [OpenClaw](https://openclaw.ai) agents. Deploy, version, and roll out updates to autonomous claws on Azure while preserving agent identity, workspace, and state.
 
-## Why a desktop
+Each claw is an always-on VM with a full graphical desktop, OpenClaw gateway, Telegram bot, Chrome, and Claude Code. The desktop is the point -- as computer-use capabilities ship across model providers, claws should be running on a real desktop with a real browser, continuously exercising those capabilities in the environment they're designed for.
 
-Every claw runs a full graphical desktop (xfce4 on `:0`, exposed over VNC). This is intentional. As computer-use capabilities ship across model providers, we want agents running on a real desktop with a real browser, testing those capabilities continuously in the environment they're designed for. The desktop isn't a legacy artifact -- it's the test surface.
+The default run mode is deliberately permissive: sandbox off, full exec, passwordless sudo. The agent operates like a human at the keyboard. Containment lives at the infrastructure boundary, not inside the guest. More restrictive run modes are a natural next contribution.
 
-## Why deliberately permissive
-
-The default run mode is wide open: sandbox off, full exec rights, passwordless sudo, all ports exposed. The agent operates as if it were a human at the keyboard. Containment is at the infrastructure boundary (isolated resource group, scoped credentials), not inside the guest.
-
-This is the starting point, not the end state. We ship the permissive mode first because it's the one that works today and unblocks everything else. The project is structured so the community can contribute more secure run modes (restricted exec policies, network egress controls, hardened images, read-only root filesystems) without breaking the core lifecycle. If you have opinions about how agents should be sandboxed, this is the place to build it.
-
-## How it works
-
-**Image = versioned system runtime.** OS, packages, OpenClaw, Chrome, Claude Code, boot logic -- baked once, stamped out repeatedly.
-
-**Data disk = durable agent state.** Config, secrets, workspace, memory, session state -- survives VM replacement on a detachable Azure managed disk.
-
-**Boot script = late binding.** Mounts the disk, seeds defaults on first run, repairs symlinks, applies migrations, starts services.
-
-Update the image, swap the VM underneath, the agent picks up where it left off.
-
-## Lifecycle
-
-### Build from scratch
+## Quick start
 
 ```bash
-cp .env.template .env && vi .env
-./deploy.sh scratch
+cp .env.template .env && vi .env    # API keys + Telegram bot token
+./deploy.sh scratch                  # full install from stock Ubuntu, ~10 min
 ```
 
-Full install from stock Ubuntu 24.04. ~10 min. When done, message the Telegram bot.
+Message the Telegram bot. The agent responds.
 
-### Bake the image
+## Image lifecycle
 
 ```bash
-./deploy.sh bake 1.0.0
+./deploy.sh bake 1.0.0                          # capture as versioned image
+ENV_FILE=.env.alice VM_NAME=alice ./deploy.sh    # stamp out a claw, ~2 min
+./deploy.sh upgrade alice --image 2.0.0          # swap image, keep state
 ```
 
-Strips secrets, captures the system as a versioned image in Azure Compute Gallery.
+**Image** = versioned system runtime (OS, packages, OpenClaw, Chrome, Claude Code, boot logic). **Data disk** = durable agent state (config, secrets, workspace, memory). Update the image, swap the VM, the agent picks up where it left off. Migration scripts in `updates/` run automatically on upgrade.
 
-### Stamp out claws
+## Credentials
 
-```bash
-ENV_FILE=.env.alice VM_NAME=alice ./deploy.sh
-ENV_FILE=.env.bob   VM_NAME=bob   ./deploy.sh
-```
+Each claw gets its own `.env`:
 
-~2 min each. Fresh data disk, own credentials, own Telegram bot, fully independent.
-
-### Roll out updates
-
-```bash
-./deploy.sh bake 2.0.0
-./deploy.sh upgrade alice --image 2.0.0
-```
-
-Numbered migration scripts in `updates/` run automatically on the data disk after each upgrade.
-
-## Credentials per claw
-
-| Credential | Purpose |
-|---|---|
-| `TELEGRAM_BOT_TOKEN` | Each claw is a different bot (@BotFather) |
-| `XAI_API_KEY` | Model provider (can share across claws) |
-| `OPENAI_API_KEY` | Optional |
-| `BRIGHTDATA_API_TOKEN` | Optional, web research |
-| `TELEGRAM_USER_ID` | Optional, restricts who can DM the bot |
-| `VM_PASSWORD` | Optional, auto-generated. Single password for SSH and VNC. |
+| Key | Required | Notes |
+|---|---|---|
+| `TELEGRAM_BOT_TOKEN` | yes | Unique per claw -- one bot per token |
+| `XAI_API_KEY` | yes | Can share across claws if desired |
+| `OPENAI_API_KEY` | no | For OpenAI-model agents |
+| `BRIGHTDATA_API_TOKEN` | no | Web research |
+| `TELEGRAM_USER_ID` | no | Restricts who can DM the bot |
+| `VM_PASSWORD` | no | Auto-generated if blank. Same password for SSH and VNC. |
 
 ## Prerequisites
 
 - Azure CLI (`az login`)
 - `envsubst` (`brew install gettext`)
-- `sshpass` (deploy-time automation only -- VMs accept plain `ssh azureuser@ip` from anywhere)
+- `sshpass` (deploy-time automation only -- claws accept plain `ssh azureuser@ip`)
 
 ## Connect
 
 ```bash
-ssh azureuser@<ip>          # password printed at deploy time, saved in .vm-state
-open vnc://<ip>:5900        # same password
+ssh azureuser@<ip>       # password in .vm-state
+open vnc://<ip>:5900     # same password
 ```
 
-## Stop / start
+## Daily operations
 
 ```bash
-az vm deallocate -g rg-linux-desktop -n alice   # billing stops
-az vm start      -g rg-linux-desktop -n alice   # everything resumes
+az vm deallocate -g rg-linux-desktop -n alice   # stop billing
+az vm start      -g rg-linux-desktop -n alice   # resume, services auto-start
 ```
 
-Nothing reinstalls. Systemd services auto-start. Data disk stays attached.
+## Verification
+
+`deploy.sh` runs a health check after every deploy and upgrade. Run it manually:
+
+```bash
+ssh azureuser@<ip> 'sudo /opt/claw/verify.sh'
+```
 
 ## Contributing
 
-The architecture is designed to be extended. Areas where contributions would be valuable:
+The project ships with a single permissive run mode on Azure. It's structured to be extended:
 
-- **Secure run modes** -- restricted exec policies, network egress controls, read-only root
-- **Cloud providers** -- GCP, AWS, bare metal adaptations
-- **Image variants** -- minimal (no desktop), GPU-enabled, ARM
-- **Channels** -- Slack, Discord, Matrix adapters beyond Telegram
-- **Orchestration** -- fleet-wide rollouts, health dashboards, auto-scaling
-
-## Destroy
-
-```bash
-az vm delete -g rg-linux-desktop -n alice --yes                    # one claw
-az group delete --name rg-linux-desktop --yes --no-wait            # everything
-```
+- **Run modes** -- restricted exec policies, network egress controls, hardened images
+- **Cloud providers** -- GCP, AWS, bare metal
+- **Image variants** -- headless, GPU, ARM
+- **Channels** -- Slack, Discord, Matrix
+- **Fleet ops** -- rollout orchestration, dashboards, auto-scaling
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+[MIT](LICENSE)
