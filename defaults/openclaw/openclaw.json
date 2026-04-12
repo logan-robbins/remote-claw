@@ -11,7 +11,7 @@
         "mode": "off"
       },
       "elevatedDefault": "full",
-      "thinkingDefault": "max",
+      "thinkingDefault": "xhigh",
       "subagents": {
         "model": "xai/grok-4.20-0309-reasoning",
         "maxConcurrent": 4,
@@ -61,7 +61,9 @@
       "dmPolicy": "open",
       "allowFrom": ["*"],
       "groupPolicy": "disabled",
-      "streaming": "partial"
+      "streaming": {
+        "mode": "partial"
+      }
     }
   },
 
@@ -91,8 +93,7 @@
     "enabled": true,
     "executablePath": "/usr/bin/google-chrome-stable",
     "headless": false,
-    "noSandbox": true,
-    "cdpPort": 18800
+    "noSandbox": true
   },
 
   "logging": {

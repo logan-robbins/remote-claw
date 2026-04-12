@@ -155,7 +155,7 @@ write_files:
               "mode": "off"
             },
             "elevatedDefault": "full",
-            "thinkingDefault": "max",
+            "thinkingDefault": "xhigh",
             "subagents": {
               "model": "xai/grok-4.20-0309-reasoning",
               "maxConcurrent": 4,
@@ -205,7 +205,9 @@ write_files:
             "dmPolicy": "${TELEGRAM_DM_POLICY}",
             "allowFrom": [${TELEGRAM_ALLOW_FROM}],
             "groupPolicy": "disabled",
-            "streaming": "partial"
+            "streaming": {
+              "mode": "partial"
+            }
           }
         },
 
