@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="openclawps.png" alt="OpenClawps" width="400">
+</p>
+
 # OpenClawps
 
 Ops for [OpenClaw](https://openclaw.ai) agents. One command to deploy a fully equipped, desktop-running claw on Azure. One command to upgrade it without losing state.
