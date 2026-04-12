@@ -146,14 +146,22 @@ write_files:
         "agents": {
           "defaults": {
             "model": {
-              "primary": "xai/grok-4"
+              "primary": "xai/grok-4.20-0309-reasoning",
+              "fallbacks": ["xai/grok-4"]
             },
             "workspace": "/home/azureuser/workspace",
             "maxConcurrent": 4,
             "sandbox": {
               "mode": "off"
             },
-            "elevatedDefault": "full"
+            "elevatedDefault": "full",
+            "thinkingDefault": "max",
+            "subagents": {
+              "model": "xai/grok-4.20-0309-reasoning",
+              "maxConcurrent": 4,
+              "maxSpawnDepth": 5,
+              "maxChildrenPerAgent": 20
+            }
           },
           "list": [
             {
@@ -170,6 +178,14 @@ write_files:
               "baseUrl": "https://api.x.ai/v1",
               "api": "openai-completions",
               "models": [
+                {
+                  "id": "grok-4.20-0309-reasoning",
+                  "name": "Grok 4 Reasoning",
+                  "reasoning": true,
+                  "input": ["text"],
+                  "contextWindow": 200000,
+                  "maxTokens": 32768
+                },
                 {
                   "id": "grok-4",
                   "name": "Grok 4",

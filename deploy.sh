@@ -182,7 +182,7 @@ load_env() {
     done
 
     # Default model if not specified
-    export OPENCLAW_MODEL="${OPENCLAW_MODEL:-xai/grok-4}"
+    export OPENCLAW_MODEL="${OPENCLAW_MODEL:-xai/grok-4.20-0309-reasoning}"
 }
 
 # --- Telegram policy derivation -----------------------------------------------
