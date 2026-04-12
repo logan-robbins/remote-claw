@@ -88,7 +88,7 @@ The project ships with a single permissive run mode on Azure. It's structured to
 
 ## Author
 
-Built by [Logan Robbins](https://linkedin.com/in/loganrobbins) -- AI architect and researcher with 15+ years building production systems at Disney, Intel, Apple, IBM, and Rackspace. Currently founding co-architect of the AI Center of Excellence at Disney and author of the [Parallel Decoder Transformer](https://arxiv.org/abs/2512.10054) paper on synchronized parallel generation. Previously built enterprise AI platforms at Intel (iForge/iGPT) and Apple, MLOps pipelines at IBM, and scaled distributed systems from zero to millions of users. Opinions about how agents should run in production come from actually running them there.
+Built by [Logan Robbins](https://linkedin.com/in/loganrobbins) -- AI architect and researcher with 15+ years building production systems at Disney, Intel, Apple, and IBM. Currently AI Platform Architect at Disney and author of the [Parallel Decoder Transformer](https://arxiv.org/abs/2512.10054) paper on synchronized parallel generation. Previously built enterprise AI platforms at Intel and Apple, MLOps pipelines at IBM, and designed distributed systems at scale. Opinions about how agents should run in production come from actually running them there.
 
 ## License
 
