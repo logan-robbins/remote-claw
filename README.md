@@ -17,6 +17,118 @@ Architecture diagrams and topology: [challengelogan.com/openclawps](https://chal
 - **Fleet-friendly** -- Same image, different `.env`, different claw. Each gets its own Telegram bot, API keys, and workspace.
 - **33-point health checks** -- `verify.sh` runs after every deploy and upgrade. Catches misconfigs before they become mystery failures.
 
+## Architecture
+
+### Two-layer separation
+
+The system and the claw are on separate disks. The system is disposable. The claw is portable.
+
+```mermaid
+graph LR
+    subgraph IMAGE["OS Disk (from image — disposable)"]
+        OS[Ubuntu 24.04 + xfce4]
+        OC[OpenClaw + Chrome + Claude Code]
+        BOOT["/opt/claw/boot.sh"]
+        UNITS[systemd units]
+    end
+
+    subgraph DATA["Data Disk /mnt/claw-data (portable — survives upgrades)"]
+        CONFIG["openclaw/ — config, secrets, exec-approvals"]
+        WS["workspace/ — SOUL.md, agents, memory, skills"]
+        STATE["sessions, transcripts, Telegram state"]
+        VNC["vnc-password.txt, update-version.txt"]
+    end
+
+    BOOT -->|"symlinks"| CONFIG
+    BOOT -->|"symlinks"| WS
+
+    style IMAGE fill:#1e3a5f,stroke:#3b82f6,color:#e2e8f0
+    style DATA fill:#2d1854,stroke:#a855f7,color:#e2e8f0
+```
+
+### Upgrade lifecycle
+
+Delete the VM, keep the disk, create a new VM from a new image, reattach the disk. The claw picks up where it left off.
+
+```mermaid
+sequenceDiagram
+    participant Op as Operator
+    participant AZ as Azure
+    participant Disk as Data Disk
+    participant VM as New VM (v2)
+
+    Op->>AZ: deploy.sh upgrade alice --image 2.0.0
+    AZ->>AZ: Deallocate old VM
+    AZ->>Disk: Detach data disk
+    AZ->>AZ: Delete old VM
+    AZ->>VM: Create VM from image v2
+    AZ->>VM: Attach data disk at LUN 0
+    VM->>VM: cloud-init injects secrets
+    VM->>VM: boot.sh mounts disk
+    VM->>VM: Symlinks restored
+    VM->>VM: run-updates.sh (003 → 004...)
+    VM->>VM: Gateway + Telegram start
+    VM-->>Op: verify.sh — 33 checks pass
+```
+
+### Boot sequence
+
+Every VM start runs `boot.sh`. Idempotent — safe to rerun, safe to reboot.
+
+```mermaid
+flowchart LR
+    A[Mount disk<br/>LUN 0 discovery] --> B[Seed defaults<br/>first boot only]
+    B --> C[Symlinks<br/>~/.openclaw<br/>~/workspace]
+    C --> D[Permissions<br/>+ VNC sync]
+    D --> E[Tailscale<br/>join if key set]
+    E --> F[Run updates<br/>version-gated]
+    F --> G[Start services<br/>lightdm, VNC,<br/>gateway, claude]
+
+    style A fill:#2d1854,stroke:#a855f7,color:#e2e8f0
+    style B fill:#0a2e1a,stroke:#22c55e,color:#e2e8f0
+    style C fill:#1e3a5f,stroke:#3b82f6,color:#e2e8f0
+    style D fill:#1e3a5f,stroke:#3b82f6,color:#e2e8f0
+    style E fill:#0c2d3d,stroke:#06b6d4,color:#e2e8f0
+    style F fill:#3d2800,stroke:#f59e0b,color:#e2e8f0
+    style G fill:#0a2e1a,stroke:#22c55e,color:#e2e8f0
+```
+
+### Fleet topology
+
+Same image, different `.env`, different claw. Each is independent.
+
+```mermaid
+graph TB
+    GALLERY["Azure Compute Gallery<br/>claw-base v3.0.0"]
+
+    GALLERY --> ALICE
+    GALLERY --> BOB
+    GALLERY --> CAROL
+
+    subgraph ALICE["alice"]
+        A_VM["VM (from image)"]
+        A_DISK[("Data Disk<br/>alice-data")]
+        A_TG["@alice_bot"]
+    end
+
+    subgraph BOB["bob"]
+        B_VM["VM (from image)"]
+        B_DISK[("Data Disk<br/>bob-data")]
+        B_TG["@bob_bot"]
+    end
+
+    subgraph CAROL["carol"]
+        C_VM["VM (from image)"]
+        C_DISK[("Data Disk<br/>carol-data")]
+        C_TG["@carol_bot"]
+    end
+
+    style GALLERY fill:#1e3a5f,stroke:#3b82f6,color:#e2e8f0
+    style ALICE fill:#0a2e1a,stroke:#22c55e,color:#e2e8f0
+    style BOB fill:#0c2d3d,stroke:#06b6d4,color:#e2e8f0
+    style CAROL fill:#2d1854,stroke:#a855f7,color:#e2e8f0
+```
+
 ## Quick start
 
 ```bash
