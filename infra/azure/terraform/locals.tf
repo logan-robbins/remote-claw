@@ -1,10 +1,10 @@
 locals {
-  fleet_manifest      = yamldecode(file(var.fleet_manifest_path))
-  environment         = local.fleet_manifest.environment
+  fleet_manifest      = yamldecode(file("${path.root}/${var.fleet_manifest_path}"))
+  azure               = local.fleet_manifest.azure
   defaults            = local.fleet_manifest.defaults
   cloud_init_template = "${path.root}/../../../vm-runtime/cloud-init/image.yaml"
-  image_identifier    = local.environment.image_identifier
-  shared_tags         = merge(try(local.environment.tags, {}), var.resource_tags, { environment = var.environment_name })
+  image_identifier    = local.azure.image_identifier
+  shared_tags         = merge(try(local.azure.tags, {}), var.resource_tags)
   empty_secret_template = {
     telegram_bot_token   = ""
     xai_api_key          = ""

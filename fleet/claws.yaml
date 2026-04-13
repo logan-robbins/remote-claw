@@ -1,5 +1,4 @@
-environment:
-  name: dev
+azure:
   location: eastus
   resource_group_name: rg-linux-desktop
   virtual_network_name: rg-linux-desktop-vnet
@@ -20,7 +19,6 @@ environment:
   tags:
     managed-by: terraform
     project: openclawps
-    environment: dev
 
 defaults:
   admin_username: azureuser

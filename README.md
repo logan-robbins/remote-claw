@@ -152,10 +152,10 @@ ENV_FILE=.env.alice VM_NAME=alice ./bin/deploy.sh # stamp out a claw, ~2 min
 
 - `bin/deploy.sh` -- canonical operator entrypoint for the current shell-based workflow
 - `infra/azure/shell/` -- Azure CLI implementation of scratch, bake, image, and upgrade
-- `infra/azure/terraform/` -- Phase 1 Terraform control plane: root module, reusable modules, and environment inputs
+- `infra/azure/terraform/` -- Phase 1 Terraform control plane: root module, reusable modules, and shared inputs
 - `infra/azure/packer/` -- reserved for the future golden-image build pipeline
 - `vm-runtime/` -- the VM payload: cloud-init templates, lifecycle scripts, seeded defaults, and update migrations
-- `fleet/` -- environment-specific fleet manifests consumed by Terraform
+- `fleet/` -- the canonical fleet manifest consumed by Terraform
 - `apps/topology/` -- isolated Vite/React app for the topology and architecture site
 
 ## Terraform Phase 1
@@ -165,8 +165,8 @@ Phase 1 is now scaffolded under `infra/azure/terraform/`:
 - `modules/shared-infra/` manages the resource group, VNet, subnet, and shared NSG.
 - `modules/image-gallery/` manages the Azure Compute Gallery and the OpenClawps image definition.
 - `modules/claw-vm/` manages one claw VM: public IP, NIC, NSG association, managed data disk, data disk attachment, and cloud-init rendering from `vm-runtime/cloud-init/image.yaml`.
-- `fleet/dev/claws.yaml` is the current declarative fleet manifest.
-- `environments/dev/terraform.tfvars` points the root module at the `dev` fleet manifest.
+- `fleet/claws.yaml` is the canonical declarative fleet manifest.
+- `terraform.tfvars` points the root module at that manifest.
 
 Current Phase 1 scope:
 
@@ -184,10 +184,10 @@ terraform fmt -recursive
 terraform validate
 ```
 
-Create a per-environment secrets file before planning. Do not commit it:
+Create a secrets file before planning. Do not commit it:
 
 ```hcl
-# infra/azure/terraform/environments/dev/secrets.auto.tfvars
+# infra/azure/terraform/secrets.auto.tfvars
 claw_secrets = {
   linux-desktop = {
     telegram_bot_token   = "123456789:token"
@@ -200,25 +200,25 @@ claw_secrets = {
 }
 ```
 
-Use Azure Storage as the backend for shared state. The root module expects an `azurerm` backend block, so initialize it with an environment-specific backend file:
+Use Azure Storage as the backend for shared state. The root module expects an `azurerm` backend block, so initialize it with a local backend file:
 
 ```hcl
-# infra/azure/terraform/environments/dev/backend.tfbackend
+# infra/azure/terraform/backend.tfbackend
 resource_group_name  = "tfstate"
 storage_account_name = "tfstateexample"
 container_name       = "tfstate"
-key                  = "openclawps-dev.tfstate"
+key                  = "openclawps.tfstate"
 ```
 
-Plan `dev` against the manifest and secrets file:
+Plan against the manifest and secrets file:
 
 ```bash
 cd infra/azure/terraform
 az login
-terraform init -reconfigure -backend-config=environments/dev/backend.tfbackend
+terraform init -reconfigure -backend-config=backend.tfbackend
 terraform plan \
-  -var-file=environments/dev/terraform.tfvars \
-  -var-file=environments/dev/secrets.auto.tfvars
+  -var-file=terraform.tfvars \
+  -var-file=secrets.auto.tfvars
 ```
 
 ## Configuration

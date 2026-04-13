@@ -1,8 +1,3 @@
-variable "environment_name" {
-  description = "Logical environment name used for tagging and command targeting."
-  type        = string
-}
-
 variable "fleet_manifest_path" {
   description = "Path to the fleet manifest YAML file, relative to the Terraform root."
   type        = string
