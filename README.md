@@ -129,14 +129,86 @@ graph TB
     style CAROL fill:#2d1854,stroke:#a855f7,color:#e2e8f0
 ```
 
-## Quick start
+## Deploying a claw
 
-```bash
-cp .env.template .env && vi .env    # model, API keys, Telegram bot token
-./bin/deploy.sh scratch             # full install from stock Ubuntu, ~10 min
+There are two deployment paths. **Terraform is preferred** -- it produces a declarative, diffable fleet state. The shell path still works for scratch installs and image baking.
+
+### Prerequisites
+
+- Azure CLI, authenticated (`az login`)
+- Terraform on `PATH`
+- An image version in the Compute Gallery (baked via Packer or `deploy.sh bake`)
+- Shared infrastructure already deployed (resource group, VNet, NSG, gallery) -- either via `infra/azure/terraform/shared/` or the original shell scripts
+
+### Terraform deployment (preferred)
+
+1. **Define the claw** in `fleet/claws.yaml`. Each entry under `claws:` becomes a VM with its own data disk.
+
+2. **Create secrets** in `infra/azure/terraform/fleet/secrets.auto.tfvars` (gitignored):
+
+```hcl
+claw_secrets = {
+  my-claw = {
+    telegram_bot_token   = "from @BotFather"
+    xai_api_key          = "your key"
+    openai_api_key       = ""
+    anthropic_api_key    = ""
+    moonshot_api_key     = ""
+    deepseek_api_key     = ""
+    brightdata_api_token = ""
+    tailscale_authkey    = ""
+  }
+}
 ```
 
-Message the Telegram bot. The agent responds.
+3. **Set your SSH public key** in `infra/azure/terraform/fleet/terraform.tfvars`:
+
+```hcl
+fleet_manifest_path  = "../../../../fleet/claws.yaml"
+admin_ssh_public_key = "ssh-ed25519 AAAA... you@host"
+```
+
+4. **Init and apply** (using local backend for now -- add `backend_override.tf` with `terraform { backend "local" {} }`):
+
+```bash
+cd infra/azure/terraform/fleet
+terraform init
+terraform plan -var-file=terraform.tfvars    # review: 7 resources per claw
+terraform apply -var-file=terraform.tfvars
+```
+
+5. **Wait ~2 minutes** for cloud-init and boot.sh to finish. boot.sh retries for up to 60 seconds if the data disk is still being attached by Terraform.
+
+6. **Verify** by SSHing in and running `/opt/claw/verify.sh` (36-point health check), or message the Telegram bot.
+
+Terraform creates per claw: public IP, NIC, NSG association, VM (from gallery image), data disk, disk attachment, and a random password. The data disk has `prevent_destroy` -- Terraform will refuse to delete claw state.
+
+**To upgrade a claw**: change `image_version` in `claws.yaml` and `terraform apply`. Terraform destroys the VM and recreates it from the new image. The data disk survives. boot.sh re-mounts it and runs any pending update scripts.
+
+**To add a claw**: add an entry to `claws.yaml`, add its secrets to `secrets.auto.tfvars`, and `terraform apply`.
+
+### Shell deployment (legacy)
+
+```bash
+cp .env.template .env && vi .env
+./bin/deploy.sh scratch             # stock Ubuntu → full install, ~10 min
+./bin/deploy.sh bake 4.0.0          # capture image to gallery
+./bin/deploy.sh upgrade alice --image 4.0.0
+```
+
+### What happens at boot
+
+cloud-init writes secrets to `~/.openclaw/.env`. Then `/opt/claw/boot.sh` runs:
+
+1. **Mount data disk** at `/mnt/claw-data` (waits up to 60s for Terraform disk attachment)
+2. **Seed defaults** on first boot (config, workspace files, VNC password)
+3. **Create symlinks** (`~/.openclaw` → disk, `~/workspace` → disk)
+4. **Fix permissions** and sync VNC password
+5. **Join Tailscale** if auth key is set
+6. **Run update scripts** (`vm-runtime/updates/NNN-*.sh`) version-gated
+7. **Start services** (lightdm, x11vnc, gateway)
+
+boot.sh is idempotent -- safe to rerun, safe to reboot.
 
 ## Image lifecycle
 
@@ -150,12 +222,6 @@ packer build -var subscription_id=$(az account show --query id -o tsv) -var imag
 
 # Or capture from a running VM (shell)
 ./bin/deploy.sh bake 4.0.0
-
-# Stamp out a claw from the image
-ENV_FILE=.env.alice VM_NAME=alice ./bin/deploy.sh
-
-# Upgrade a claw to a new image version
-./bin/deploy.sh upgrade alice --image 4.0.0
 ```
 
 ## Repository layout
@@ -302,25 +368,18 @@ At least one provider API key must be present for a claw to pass runtime verific
 | `TAILSCALE_AUTHKEY` | no | Auto-joins your tailnet for remote gateway access |
 | `VM_PASSWORD` | no | Auto-generated if blank. Same password for SSH and VNC. |
 
-## Prerequisites
-
-- Azure CLI (`az login`)
-- Terraform (`terraform` available on `PATH`)
-- `envsubst` (`brew install gettext`)
-- `sshpass` (deploy-time automation only -- claws accept plain `ssh azureuser@ip`)
-
 ## Connect
 
 ```bash
-ssh azureuser@<ip>       # password in .state/shell/current.env
-open vnc://<ip>:5900     # same password
+ssh azureuser@<ip>                # SSH key or password from terraform output
+open vnc://<ip>:5900              # same password as SSH
 ```
 
 ## Daily operations
 
 ```bash
-az vm deallocate -g rg-linux-desktop -n alice   # stop billing
-az vm start      -g rg-linux-desktop -n alice   # resume, services auto-start
+az vm deallocate -g rg-linux-desktop -n my-claw   # stop billing
+az vm start      -g rg-linux-desktop -n my-claw   # resume, services auto-start
 ```
 
 ## Security
