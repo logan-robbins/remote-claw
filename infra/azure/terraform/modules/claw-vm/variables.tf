@@ -103,6 +103,12 @@ variable "tailscale_authkey" {
   default   = ""
 }
 
+variable "admin_ssh_public_key" {
+  type        = string
+  description = "SSH public key for key-based authentication. If set, added alongside password auth."
+  default     = ""
+}
+
 variable "enable_trusted_launch" {
   type    = bool
   default = true

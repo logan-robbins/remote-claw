@@ -72,6 +72,14 @@ resource "azurerm_linux_virtual_machine" "this" {
   vtpm_enabled                    = var.enable_trusted_launch
   tags                            = var.tags
 
+  dynamic "admin_ssh_key" {
+    for_each = var.admin_ssh_public_key != "" ? [1] : []
+    content {
+      username   = var.admin_username
+      public_key = var.admin_ssh_public_key
+    }
+  }
+
   os_disk {
     caching              = "ReadWrite"
     storage_account_type = "Standard_LRS"

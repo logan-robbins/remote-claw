@@ -62,10 +62,19 @@ mount_data_disk() {
     fi
 
     local disk_dev
-    if ! disk_dev=$(find_data_disk); then
-        log "FATAL: No data disk found at LUN 0. Cannot proceed without state disk."
-        exit 1
-    fi
+    local wait_tries=0
+    local max_wait=60
+    while ! disk_dev=$(find_data_disk); do
+        (( wait_tries++ ))
+        if (( wait_tries >= max_wait )); then
+            log "FATAL: No data disk found at LUN 0 after ${max_wait}s. Cannot proceed without state disk."
+            exit 1
+        fi
+        if (( wait_tries == 1 )); then
+            log "Data disk not yet available at LUN 0 -- waiting (Terraform may still be attaching)..."
+        fi
+        sleep 1
+    done
     log "Found data disk device: ${disk_dev}"
 
     local part_dev="${disk_dev}1"

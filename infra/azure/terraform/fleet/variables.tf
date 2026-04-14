@@ -9,6 +9,12 @@ variable "resource_tags" {
   default     = {}
 }
 
+variable "admin_ssh_public_key" {
+  description = "SSH public key for key-based authentication to all claw VMs."
+  type        = string
+  default     = ""
+}
+
 variable "claw_secrets" {
   description = "Sensitive per-claw secrets keyed by claw name."
   type = map(object({

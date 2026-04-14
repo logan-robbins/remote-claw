@@ -31,4 +31,4 @@ defaults:
   enable_trusted_launch: true
 
 claws:
-  linux-desktop: {}
+  chad-claw: {}
