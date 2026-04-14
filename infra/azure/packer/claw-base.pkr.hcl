@@ -8,9 +8,10 @@ packer {
 }
 
 source "azure-arm" "claw-base" {
-  subscription_id = var.subscription_id
-  location        = var.location
-  vm_size         = var.vm_size
+  subscription_id    = var.subscription_id
+  use_azure_cli_auth = true
+  location           = var.location
+  vm_size            = var.vm_size
 
   os_type         = "Linux"
   image_publisher = "Canonical"
@@ -26,6 +27,7 @@ source "azure-arm" "claw-base" {
   }
 
   # Trusted launch (matches claw-vm module settings)
+  security_type       = "TrustedLaunch"
   secure_boot_enabled = true
   vtpm_enabled        = true
 
@@ -72,11 +74,11 @@ build {
   }
   provisioner "file" {
     source      = "../../../vm-runtime/defaults/"
-    destination = "/tmp/defaults"
+    destination = "/tmp/defaults/"
   }
   provisioner "file" {
     source      = "../../../vm-runtime/updates/"
-    destination = "/tmp/updates"
+    destination = "/tmp/updates/"
   }
 
   # Move staged files into place (file provisioner runs as packer user, not root)

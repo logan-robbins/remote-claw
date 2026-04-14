@@ -9,12 +9,8 @@ chmod 440 /etc/sudoers.d/azureuser-full
 # /opt/claw directory structure (boot files staged here by Packer provisioners)
 mkdir -p /opt/claw/defaults /opt/claw/updates
 
-# Home directory structure
-mkdir -p /home/azureuser/workspace /home/azureuser/.openclaw
-chown -R azureuser:azureuser /home/azureuser
-
-# xfce session hint
-sudo -u azureuser bash -c 'echo xfce4-session > ~/.xsession && chmod 644 ~/.xsession'
+# Home directory and xfce session hint are handled by boot.sh at deploy time
+# (azureuser doesn't exist during image build — cloud-init creates it)
 
 # Enable graphical target + services
 systemctl set-default graphical.target
