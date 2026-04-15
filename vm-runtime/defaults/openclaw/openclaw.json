@@ -2,8 +2,7 @@
   "agents": {
     "defaults": {
       "model": {
-        "primary": "xai/grok-4.20-0309-reasoning",
-        "fallbacks": ["xai/grok-4"]
+        "primary": "anthropic/claude-opus-4-6"
       },
       "workspace": "/mnt/claw-data/workspace",
       "maxConcurrent": 4,
@@ -71,6 +70,28 @@
             "input": ["text", "image"],
             "contextWindow": 262144,
             "maxTokens": 262144
+          }
+        ]
+      },
+      "anthropic": {
+        "baseUrl": "https://api.anthropic.com",
+        "api": "anthropic-messages",
+        "models": [
+          {
+            "id": "claude-opus-4-6",
+            "name": "Claude Opus 4.6",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1000000,
+            "maxTokens": 32000
+          },
+          {
+            "id": "claude-sonnet-4-6",
+            "name": "Claude Sonnet 4.6",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1000000,
+            "maxTokens": 32000
           }
         ]
       },
