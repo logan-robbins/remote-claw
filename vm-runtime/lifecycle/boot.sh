@@ -217,11 +217,22 @@ configure_telegram_policy() {
 # =============================================================================
 
 setup_symlinks() {
-    # Remove whatever exists (directory from cloud-init, stale symlink, etc.)
-    rm -rf "${HOME_DIR}/.openclaw" "${HOME_DIR}/workspace"
+    # Use bind mounts for .openclaw and workspace (exec tool rejects symlinks).
+    # vnc-password.txt stays as a symlink (not traversed by exec).
+    for pair in "openclaw:.openclaw" "workspace:workspace"; do
+        local src="${DATA_MOUNT}/${pair%%:*}"
+        local dst="${HOME_DIR}/${pair##*:}"
+        # Unmount if already mounted, remove stale symlink/dir
+        mountpoint -q "$dst" 2>/dev/null && umount "$dst"
+        rm -rf "$dst"
+        mkdir -p "$dst"
+        mount --bind "$src" "$dst"
+        # Persist in fstab
+        if ! grep -q "$dst" /etc/fstab 2>/dev/null; then
+            echo "$src $dst none bind 0 0" >> /etc/fstab
+        fi
+    done
 
-    ln -sfn "${DATA_MOUNT}/openclaw" "${HOME_DIR}/.openclaw"
-    ln -sfn "${DATA_MOUNT}/workspace" "${HOME_DIR}/workspace"
     ln -sfn "${DATA_MOUNT}/vnc-password.txt" "${HOME_DIR}/vnc-password.txt"
 
     # Recreate .xsession (removed by waagent deprovision)

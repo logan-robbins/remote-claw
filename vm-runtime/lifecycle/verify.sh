@@ -32,10 +32,10 @@ check "Data disk mounted at /mnt/claw-data" mountpoint -q /mnt/claw-data
 check ".claw-initialized marker exists" test -f /mnt/claw-data/.claw-initialized
 check "update-version.txt exists" test -f /mnt/claw-data/update-version.txt
 
-# -- Symlinks -------------------------------------------------------------------
-echo "Symlinks:"
-check "~/.openclaw -> /mnt/claw-data/openclaw" test -L /home/azureuser/.openclaw
-check "~/workspace -> /mnt/claw-data/workspace" test -L /home/azureuser/workspace
+# -- Bind mounts ----------------------------------------------------------------
+echo "Mounts:"
+check "~/.openclaw is a bind mount" mountpoint -q /home/azureuser/.openclaw
+check "~/workspace is a bind mount" mountpoint -q /home/azureuser/workspace
 check "~/.openclaw resolves to a directory" test -d /home/azureuser/.openclaw
 
 # -- Config files ---------------------------------------------------------------
