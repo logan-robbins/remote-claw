@@ -11,7 +11,9 @@
       "ask": "off",
       "askFallback": "full",
       "allowlist": [
-        { "pattern": "**" }
+        {
+          "pattern": "**"
+        }
       ]
     }
   }

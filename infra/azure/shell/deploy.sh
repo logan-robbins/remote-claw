@@ -612,7 +612,7 @@ do_bake() {
     echo "The source VM '$vm' has been generalized and can no longer be started."
     echo ""
     echo "Next steps:"
-    echo "  Deploy a new claw:  VM_NAME=test-claw ${DEPLOY_CMD}"
+    echo "  Deploy a new VM:         VM_NAME=my-vm ${DEPLOY_CMD}"
     echo "  Deploy with custom env:  ENV_FILE=.env.alice VM_NAME=alice ${DEPLOY_CMD}"
 }
 
