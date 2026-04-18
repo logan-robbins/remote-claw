@@ -68,19 +68,13 @@ resource "azurerm_linux_virtual_machine" "this" {
   disable_password_authentication = false
   network_interface_ids           = [azurerm_network_interface.this.id]
   custom_data                     = base64encode(local.rendered_cloud_init)
+  source_image_id                 = var.source_image_id
   secure_boot_enabled             = var.enable_trusted_launch
   vtpm_enabled                    = var.enable_trusted_launch
   tags                            = var.tags
 
-  source_image_reference {
-    publisher = var.source_image.publisher
-    offer     = var.source_image.offer
-    sku       = var.source_image.sku
-    version   = var.source_image.version
-  }
-
   dynamic "plan" {
-    for_each = var.source_image.plan != null ? [var.source_image.plan] : []
+    for_each = var.image_plan != null ? [var.image_plan] : []
     content {
       name      = plan.value.name
       publisher = plan.value.publisher

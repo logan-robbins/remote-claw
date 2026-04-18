@@ -8,19 +8,24 @@ azure:
     - 10.0.0.0/16
   subnet_prefixes:
     - 10.0.0.0/24
-  # No Packer / Compute Gallery — fleet VMs deploy directly from the AMD
-  # V710 marketplace image; cloud-init installs the desktop + agent layers
-  # on first boot. First-boot install is ~8-12 min; redeploys are fast
-  # because the data disk (with secrets + agent state) survives.
-  source_image:
-    publisher: amdinc1746636494855
-    offer: nvv5_v710_linux_rocm_image
-    sku: planid125
-    version: 1.0.2
-    plan:
-      name: planid125
-      publisher: amdinc1746636494855
-      product: nvv5_v710_linux_rocm_image
+  # Packer bakes the IMMUTABLE desktop layer once into clawGalleryWest
+  # as claw-desktop-gpu. Fleet VMs deploy from that gallery image; the
+  # APP layer (Node, OpenClaw, Chrome, Claude Code, Tailscale, agent
+  # services) installs at deploy time via cloud-init so iteration on it
+  # doesn't require a re-bake.
+  gallery_name: clawGalleryWest
+  fleet_image_definition_name: claw-desktop-gpu
+  fleet_image_version: "1.0.0"
+  image_definitions:
+    claw-desktop-gpu:
+      publisher: claw
+      offer: claw-vm
+      sku: desktop-gpu
+      # Must match the AMD V710 marketplace base used by the Packer bake.
+      purchase_plan:
+        name: planid125
+        publisher: amdinc1746636494855
+        product: nvv5_v710_linux_rocm_image
   hyper_v_generation: V2
   # AMD V710 marketplace base image does not support Trusted Launch.
   trusted_launch_enabled: false

@@ -31,19 +31,19 @@ variable "admin_password" {
   sensitive = true
 }
 
-variable "source_image" {
-  description = "Marketplace image reference + purchase plan. VMs deploy directly (no Packer/gallery)."
+variable "source_image_id" {
+  description = "Gallery image version URN. Fleet VMs deploy from the baked claw-desktop-gpu image."
+  type        = string
+}
+
+variable "image_plan" {
+  description = "Marketplace purchase plan inherited from the gallery image's purchase_plan. Required when the source image was baked from a marketplace base; null otherwise."
   type = object({
+    name      = string
     publisher = string
-    offer     = string
-    sku       = string
-    version   = string
-    plan = optional(object({
-      name      = string
-      publisher = string
-      product   = string
-    }))
+    product   = string
   })
+  default = null
 }
 
 variable "data_disk_size_gb" {
