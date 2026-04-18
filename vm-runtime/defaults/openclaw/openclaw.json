@@ -123,7 +123,6 @@
       "security": "full",
       "ask": "off",
       "host": "gateway",
-      "autoAllowSkills": true,
       "backgroundMs": 10000,
       "timeoutSec": 1800,
       "applyPatch": {
@@ -132,7 +131,9 @@
     },
     "elevated": {
       "enabled": true,
-      "allowFrom": ["*"]
+      "allowFrom": {
+        "*": ["*"]
+      }
     },
     "sessions": {
       "visibility": "all"
