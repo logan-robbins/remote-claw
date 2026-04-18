@@ -70,7 +70,7 @@ mount_data_disk() {
     local wait_tries=0
     local max_wait=60
     while ! disk_dev=$(find_data_disk); do
-        (( wait_tries++ ))
+        wait_tries=$((wait_tries + 1))
         if (( wait_tries >= max_wait )); then
             log "FATAL: No data disk found at LUN 0 after ${max_wait}s. Cannot proceed without state disk."
             exit 1
@@ -307,11 +307,13 @@ start_services() {
     # Display stack -- lightdm should already be running from systemd
     systemctl restart lightdm 2>/dev/null || true
 
-    # Wait for X11 :0 socket (served to humans by xrdp + Sunshine)
+    # Wait for X11 :0 socket (served to humans by xrdp + Sunshine).
+    # Use $((tries+1)) — bash `(( tries++ ))` returns exit 1 when tries is 0,
+    # which under `set -e` would abort boot.sh on the first iteration.
     local tries=0
     while [[ ! -S /tmp/.X11-unix/X0 ]] && (( tries < 60 )); do
         sleep 1
-        (( tries++ ))
+        tries=$((tries + 1))
     done
 
     if [[ -S /tmp/.X11-unix/X0 ]]; then
