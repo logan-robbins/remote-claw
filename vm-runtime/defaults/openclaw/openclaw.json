@@ -172,6 +172,9 @@
         "enabled": true
       }
     },
+    "allow": [
+      "lossless-claw"
+    ],
     "slots": {
       "contextEngine": "lossless-claw"
     }
