@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 011-home-claude-md-symlink.sh -- move ~/CLAUDE.md onto the data disk and
+# 008-home-claude-md-symlink.sh -- move ~/CLAUDE.md onto the data disk and
 # symlink ~/CLAUDE.md to it, so it survives VM replacements (image upgrades).
 #
 # Canonical location: /mnt/claw-data/workspace/CLAUDE.md (accessible via

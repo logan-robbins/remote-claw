@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 006-clawhub-skills.sh -- install clawhub CLI and default skills
+# 004-clawhub-skills.sh -- install clawhub CLI and default skills
 WS="/mnt/claw-data/workspace"
 
 # Install clawhub CLI globally

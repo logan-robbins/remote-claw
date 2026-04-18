@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 004-workspace-docs.sh -- deploy AGENTS.md and TOOLS.md to existing data disks
+# 002-workspace-docs.sh -- deploy AGENTS.md and TOOLS.md to existing data disks
 DEFAULTS="/opt/claw/defaults/workspace"
 WS="/mnt/claw-data/workspace"
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 009-dev-tools.sh -- install gh CLI, codex CLI, generate persistent SSH key
+# 007-dev-tools.sh -- install gh CLI, codex CLI, generate persistent SSH key
 
 # gh CLI
 if ! command -v gh >/dev/null 2>&1; then

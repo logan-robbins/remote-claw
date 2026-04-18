@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 007-phantom-touch.sh -- install PhantomTouch relay server and register MCP server
+# 005-phantom-touch.sh -- install PhantomTouch relay server and register MCP server
 ENV_FILE="/mnt/claw-data/openclaw/.env"
 INSTALL_DIR="/opt/claw/phantom-touch"
 

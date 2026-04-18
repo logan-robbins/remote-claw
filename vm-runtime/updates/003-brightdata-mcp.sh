@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 005-brightdata-mcp.sh -- register Bright Data MCP server with OpenClaw
+# 003-brightdata-mcp.sh -- register Bright Data MCP server with OpenClaw
 #
 # Uses `openclaw mcp set` (the CLI) instead of jq-poking openclaw.json
 # directly, so the schema stays in sync with whatever OpenClaw version
