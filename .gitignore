@@ -17,3 +17,7 @@ infra/azure/terraform/fleet/backend_override.tf
 
 # Google OAuth client secret files (kept in repo root, never committed)
 client_secret_*.json
+
+# Personal Claude Code settings — track only skills/ for shared skills
+.claude/*
+!.claude/skills/
