@@ -124,7 +124,7 @@ After `az vm start`, allow ~30–60 s for the chat UI to come back: cloud-init d
 
 ## Passwords, keys, and access modes
 
-All access credentials for a claw live in **one** authoritative place: Terraform state on the operator's machine. Per-VM the same password is used for SSH, RDP, VNC, and the Sunshine web UI admin.
+All access credentials for a claw live in **one** authoritative place: Terraform state on the operator's machine. Per-VM the same password is used for SSH, RDP, and the Sunshine web UI admin.
 
 ```bash
 # Get the password for a claw (from the fleet root)
@@ -145,10 +145,11 @@ Access modes (in rough order of preference):
 |---|---|---|
 | **Tailscale Serve → chat UI** | 443 (tailnet) | `https://<magicdns-name>/` — primary way to talk to the agent. Requires Tailscale Serve enabled once at tailnet level (see below). |
 | **SSH tunnel → chat UI** | local 18789 | `ssh -L 18789:127.0.0.1:18789 azureuser@<ip>` → `http://localhost:18789/`. Zero-config fallback when Serve isn't available. |
-| **SSH** | 22 | `ssh azureuser@<ip>` (key auth if your pubkey matches `admin_ssh_public_key`; password also accepted). |
-| **RDP** | 3389 | Microsoft Remote Desktop / FreeRDP. Full XFCE desktop session. |
-| **Sunshine / Moonlight** | 47984–48010 | Low-latency GPU-accelerated streaming. Admin UI: `https://<ip>:47990`. First visit sets / confirms the admin password (seeded from the VNC file). |
-| **VNC** | 5900 | Legacy fallback via x11vnc, same password. |
+| **SSH** | 22/tcp | `ssh azureuser@<ip>` (key auth if your pubkey matches `admin_ssh_public_key`; password also accepted). |
+| **RDP** | 3389/tcp | Microsoft Remote Desktop / FreeRDP. Spawns a **new** per-connection X session (`:10+`) — you don't see the agent's desktop. Use Moonlight to share the agent's session. |
+| **Sunshine / Moonlight** | 47984/47989/47990/48010 tcp + 47998-48002 udp | Low-latency GPU-accelerated streaming. Admin UI: `https://<ip>:47990`. Captures `:0` — the **same** display the agent runs on, so you see the agent's Chrome and share its browser profile. This is the intended "observe and assist" path. |
+
+**Fleet NSG inbound rules** (`rg-claw-westus-nsg`, set by `shared-infra` module): SSH 22, RDP 3389, Sunshine TCP `47984/47989/47990/48010`, Sunshine UDP `47998-48002`, Tailscale direct UDP `41641`. Azure's implicit `DenyAll` at priority 65500 closes everything else. **VNC port 5900 is not open** — the data disk still carries a `vnc-password.txt` because Sunshine's admin password is seeded from it, but x11vnc itself isn't running. Add an explicit rule + start `x11vnc` if you need it.
 
 ## Where things live
 
@@ -191,7 +192,9 @@ Access modes (in rough order of preference):
 
 - **The agent is a gateway plugin, not a separate process.** The Claude Code-equivalent agent on each VM runs as the `lossless-claw` plugin inside `openclaw-gateway.service`. `pgrep claude` / `pgrep start-claude` return nothing. `sudo systemctl stop openclaw-gateway` is the ONLY way to halt the agent; `systemctl restart` resumes its in-flight task from memory.
 - **Agent plan persistence**: conversation state (including "what I'm working on") lives in `~/.openclaw/lcm.db` (SQLite). Surviving restarts is the default — to interrupt a fixated agent you edit the DB, not kill a process. Tables: `conversations`, `messages` (PK `message_id`, ordering by `seq`), `message_parts` (typed children with `part_type`, `text_content`, etc.), `messages_fts*`, `summary_messages`. Use the `lcm-pruning` skill to trim a fixated conversation tail and inject a replacement user turn.
-- **Gateway startup grace**: ~11–12s from `systemctl start` to `[gateway] ready` (ExecStartPre waits for `/tmp/.X11-unix/X99`). Don't conclude a restart failed until you've waited this long; verify with `sudo ss -tlnp | grep :18789` and `curl -sS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:18789/`.
+- **Gateway startup grace**: the gateway's `ExecStartPre` waits for `xfce4-session` on `:0` (up to 120s, typical 15–20s on a warm boot). Don't conclude a restart failed until you've waited this long; verify with `sudo ss -tlnp | grep :18789` and `curl -sS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:18789/`.
+- **Agent display is `:0`, shared with the operator.** The gateway service sets `DISPLAY=:0`, `XAUTHORITY=/home/azureuser/.Xauthority`, `XDG_RUNTIME_DIR=/run/user/1000` — same as the LightDM autologin XFCE session. When you Moonlight in, you see the agent's Chrome and share its `~/.config/google-chrome` profile (GitHub / Google logins the operator performs flow to the agent and vice versa). There used to be a dedicated Xvfb `:99` for the agent; it was retired in update `013-agent-on-display-zero.sh`. Don't reintroduce it — the profile-sharing is the point.
+- **Chrome launches via `/usr/local/bin/google-chrome-stable`** — a PATH-first wrapper installed by update `012-chrome-disable-keyring.sh` that prepends `--password-store=basic`. Stops the gnome-keyring unlock dialog from freezing headless XFCE. `openclaw.json`'s `browser.executablePath` points here; the apt-installed `/usr/bin/google-chrome-stable` is the underlying binary.
 - **Config-write forensics**: every write to `openclaw.json` is logged at `~/.openclaw/logs/config-audit.jsonl` with pid/ppid/argv/hashes before and after. When the agent or anyone else has been editing config, read this first.
 - **Gateway self-defense**: on detecting a clobbered config (missing `gateway.mode`, etc.) the gateway stashes the bad file at `~/.openclaw/openclaw.json.clobbered.<ISO>` before refusing to start.
 - **Tooling on the VM**: `sqlite3` CLI is NOT installed. Use `python3 -c 'import sqlite3; ...'` for any DB work — the stdlib module is the only option.

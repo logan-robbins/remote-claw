@@ -13,7 +13,7 @@ Architecture diagrams and topology: [challengelogan.com/openclawps](https://chal
 ## What this adds to OpenClaw
 
 - **One-command Azure deploy** -- `terraform apply` in `infra/azure/terraform/fleet/` goes from zero to a working agent with Telegram, Chrome, and Claude Code in ~2 min (after the baseline image is baked once).
-- **Full graphical desktop** -- Real XFCE desktop with RDP, Sunshine/Moonlight streaming, and VNC. Computer-use agents need a real browser and a real screen, not a headless shell.
+- **Full graphical desktop** -- Real XFCE desktop with RDP and Sunshine/Moonlight streaming. Computer-use agents need a real browser and a real screen, not a headless shell. Moonlight captures the same display (`:0`) the agent runs on, so you *see* the agent working and share its Chrome profile (GitHub/Google logins flow both ways).
 - **Three-layer separation** -- **(1)** an immutable baseline image (OS + GPU driver + desktop + remote-access stack, baked by Packer, re-baked rarely), **(2)** an app install layer (Node, OpenClaw, Chrome, Claude Code, Tailscale, runtime payload — installed by cloud-init on every deploy, iterated without re-baking), and **(3)** a portable data disk (identity, workspace, memory, credentials — survives VM replacement). The claw is not the VM; it rides on top of it.
 - **Stateful upgrades** -- Destroy the old VM, create a new one from the current image + re-run cloud-init, reattach the same data disk. The claw picks up where it left off. Migration scripts run automatically.
 - **Fleet-friendly** -- Same image, different `.env`, different claw. Each gets its own Telegram bot, API keys, and workspace.
@@ -94,7 +94,7 @@ flowchart LR
     C --> D[Permissions<br/>+ VNC sync]
     D --> E[Tailscale<br/>join if key set]
     E --> F[Run updates<br/>version-gated]
-    F --> G[Start services<br/>lightdm, VNC,<br/>gateway, claude]
+    F --> G[Start services<br/>lightdm, xrdp,<br/>sunshine, gateway]
 
     style A fill:#2d1854,stroke:#a855f7,color:#e2e8f0
     style B fill:#0a2e1a,stroke:#22c55e,color:#e2e8f0
@@ -222,7 +222,7 @@ On first deploy, cloud-init installs the app layer (`vm-runtime/install/os/*.sh`
 4. **Fix permissions** and sync VNC password
 5. **Join Tailscale** if auth key is set
 6. **Run update scripts** (`vm-runtime/updates/NNN-*.sh`) version-gated
-7. **Start services** (lightdm, x11vnc, xrdp, sunshine, openclaw-gateway)
+7. **Start services** (lightdm, xrdp, sunshine, openclaw-gateway on the `:0` session)
 
 boot.sh is idempotent -- safe to rerun, safe to reboot. Gateway startup grace is ~11–12s on top of boot.
 
@@ -386,13 +386,13 @@ Each claw pulls its per-VM secrets from `infra/azure/terraform/fleet/secrets.aut
 | `brightdata_api_token` | no | Web research |
 | `tailscale_authkey` | no | Auto-joins your tailnet for Tailscale Serve / remote chat-UI access |
 
-The VM password is **not** a configuration input — Terraform generates one per claw via `random_password.vm_password` and surfaces it at `terraform output -raw -json claw_vm_passwords`. The same password is used for SSH, RDP, VNC, and Sunshine; it's also stored on the data disk at `/mnt/claw-data/vnc-password.txt`.
+The VM password is **not** a configuration input — Terraform generates one per claw via `random_password.vm_password` and surfaces it at `terraform output -raw -json claw_vm_passwords`. The same password is used for SSH, RDP, and Sunshine; it's also stored on the data disk at `/mnt/claw-data/vnc-password.txt` (kept under the `vnc-` name for backwards compatibility; Sunshine's admin password is seeded from it).
 
 The default model and `telegram_user_id` are set under `defaults:` / per-claw in `fleet/claws.yaml`. Default model today: `xai/grok-4.20-0309-reasoning`.
 
 ## Connect
 
-The chat UI (OpenClaw gateway, port 18789) is the primary interface to the agent; RDP/Sunshine/VNC give you the graphical desktop. A single per-claw password is shared across SSH, RDP, VNC, and the Sunshine admin UI.
+The chat UI (OpenClaw gateway, port 18789) is the primary interface to the agent; Moonlight gives you the graphical desktop *on the same display the agent uses*, so you can watch it work and share its Chrome profile. A single per-claw password is shared across SSH, RDP, and the Sunshine admin UI.
 
 ```bash
 # Pull the claw's current IP and password from Terraform
@@ -409,12 +409,23 @@ ssh -L 18789:127.0.0.1:18789 azureuser@$IP     # → http://localhost:18789/
 # SSH shell
 ssh azureuser@$IP
 
-# RDP (full XFCE desktop)      → $IP:3389       (user: azureuser, pass: $PW)
-# Sunshine / Moonlight         → $IP:47989      (admin UI: https://$IP:47990)
-# VNC (legacy)                 → vnc://$IP:5900 (same password)
+# Moonlight (agent's :0)       → $IP:47989      (admin UI: https://$IP:47990, same password)
+# RDP (fresh XFCE per session) → $IP:3389       (user: azureuser, pass: $PW)
 ```
 
-The password is also stored on the data disk at `/mnt/claw-data/vnc-password.txt` (mode 0600).
+Moonlight captures `:0` — the display the agent runs on — so you see exactly what it sees. RDP spawns a per-connection session, so it does *not* share state with the agent; use it only if you need a separate isolated desktop. VNC (5900) is not in the default NSG; open it explicitly if you want a legacy fallback.
+
+The password is also stored on the data disk at `/mnt/claw-data/vnc-password.txt` (mode 0600; the filename is historical — it's the same password used for SSH/RDP/Sunshine).
+
+## Disconnect troubleshooting
+
+If the tailnet UI looks like it is dropping in and out, check these three causes first:
+
+- `apt-daily-upgrade.service` can briefly re-exec `systemd` and bounce core networking. On `2026-04-19`, this caused repeated `systemd-networkd` / `systemd-resolved` churn plus tailnet log lines like `LinkChange: all links down` and `dial tcp 127.0.0.1:18789: connect: connection refused` while the local HTTP target was unavailable.
+- Ad hoc unit rewrites cause visible client disconnects even when the process itself is healthy. On `2026-04-19 23:39:25 UTC`, `/tmp/013-agent-on-display-zero.sh` explicitly stopped the UI service, reloaded units, and brought it back in a different display mode.
+- Config clobbers fail hard. On `2026-04-19 02:15:53 UTC`, the config audit log recorded `gateway-mode-missing-vs-last-good`, which is the validator case that prevents startup and writes a `.clobbered.*` backup.
+
+Operationally, brief tailnet flaps during unattended package activity are expected unless those timers are disabled or rescheduled. Persistent flapping after boot is not normal; inspect the boot journal, the tailnet journal, and the config audit log before changing service files by hand.
 
 ## Daily operations
 
@@ -437,7 +448,16 @@ az vm start      -g rg-claw-westus -n chad-claw
 
 ## Security
 
-Deliberately permissive inside the VM: sandbox off, full exec, passwordless sudo. The agent operates like a human at the keyboard. Containment lives at the infrastructure boundary (isolated resource group, scoped credentials), not inside the guest.
+Deliberately permissive inside the VM: sandbox off, full exec, passwordless sudo. The agent operates like a human at the keyboard. Containment lives at the infrastructure boundary, not inside the guest.
+
+Concretely, the fleet NSG (`rg-claw-westus-nsg`) runs **least-privilege** — inbound only on:
+
+- **22/tcp** SSH — operator management
+- **3389/tcp** RDP — per-session XFCE desktop
+- **47984/47989/47990/48010 tcp + 47998-48002 udp** Sunshine/Moonlight — agent's `:0` session capture
+- **41641/udp** Tailscale direct P2P — fallback is DERP relays
+
+Everything else falls to Azure's implicit `DenyAll` at priority 65500. The chat UI (18789) stays loopback-bound and is reached only via Tailscale Serve or an SSH tunnel — it is never exposed directly. Scoping `source_address_prefix` to the operator's IP is a straightforward next step; would break the `deploy-fleet` verify job that SSHes from GitHub Actions runners.
 
 ## Contributing
 
