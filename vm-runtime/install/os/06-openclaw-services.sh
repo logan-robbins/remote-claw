@@ -24,8 +24,13 @@ set -euo pipefail
 cat > /etc/systemd/system/openclaw-gateway.service <<'UNIT'
 [Unit]
 Description=OpenClaw Gateway (runs on the shared XFCE :0 session)
-After=graphical.target network-online.target
-Wants=network-online.target graphical.target
+# Avoid graphical.target here: WantedBy=graphical.target + After=graphical.target
+# creates a shutdown-ordering cycle with multi-user.target (observed on a reboot
+# 2026-04-20 where systemd resolved the cycle by dropping the service from the
+# boot set entirely -- ConditionResult=no, never started). The xfce4-session
+# wait in ExecStartPre already gates on the display being ready.
+After=network-online.target
+Wants=network-online.target
 ConditionPathExists=/home/azureuser/.openclaw/openclaw.json
 ConditionPathExists=/home/azureuser/.openclaw/.env
 
@@ -52,7 +57,7 @@ StandardOutput=journal
 StandardError=journal
 
 [Install]
-WantedBy=graphical.target
+WantedBy=multi-user.target
 UNIT
 
 systemctl daemon-reload
