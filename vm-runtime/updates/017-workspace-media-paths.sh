@@ -1,20 +1,27 @@
 #!/usr/bin/env bash
-# 017-workspace-media-paths.sh -- teach the OpenClaw/Claude Code agent about the
-# hardcoded media-root allowlist (source: openclaw dist/local-roots-BrPriMlc.js
-# buildMediaLocalRoots). Writing to plain /tmp/ yields "Outside allowed folders"
-# in the chat UI. Fix: refreshed workspace docs + a ~/workspace/tmp -> /tmp/
-# symlink so /tmp/* can at least be *referenced* through an allowed root.
+# 017-workspace-media-paths.sh -- teach the OpenClaw/Claude Code agent about
+# the hardcoded media-root allowlist (source: openclaw dist/local-roots-*.js
+# buildMediaLocalRoots). Writing to plain /tmp/ yields "Outside allowed
+# folders" in the chat UI.
 #
-# Runs as root via run-updates.sh; user-scoped ownership fixed at the end.
+# Fix: refresh the three workspace docs, and bind-mount /tmp onto
+# /mnt/claw-data/workspace/tmp so any /tmp/* path is simultaneously
+# addressable via an allowed root. Bind mount (not symlink) so the server's
+# fs.realpath() check also passes.
+#
+# Boot.sh calls setup_tmp_passthrough() every boot; this update handles the
+# one-time swap on already-running VMs (including replacing the earlier
+# symlink prototype).
+#
+# Runs as root via run-updates.sh.
 set -euo pipefail
 
 DEFAULTS="/opt/claw/defaults/workspace"
 WS="/mnt/claw-data/workspace"
+TMP_BIND="$WS/tmp"
 TAG="[update-017]"
 
-# Refresh the three docs that changed. Overwrite is acceptable because the
-# previous live versions matched the repo defaults (verified 2026-04-21); any
-# future drift should be synced back into the repo before shipping an update.
+# 1. Refresh workspace docs.
 for f in AGENTS.md TOOLS.md CLAUDE.md; do
     if [ -f "$DEFAULTS/$f" ]; then
         cp "$DEFAULTS/$f" "$WS/$f"
@@ -23,35 +30,34 @@ for f in AGENTS.md TOOLS.md CLAUDE.md; do
     fi
 done
 
-# Symlink ~/workspace/tmp -> /tmp/ so agents can reference /tmp files via a
-# path that starts with an allowed root (/mnt/claw-data/workspace). Client-side
-# UI string-check passes via this; server-side realpath may still reject the
-# final fetch, which is documented in AGENTS.md.
-LINK="$WS/tmp"
-if [ -L "$LINK" ]; then
-    current=$(readlink "$LINK")
-    if [ "$current" = "/tmp/" ] || [ "$current" = "/tmp" ]; then
-        echo "$TAG $LINK already points to /tmp/"
-    else
-        rm -f "$LINK"
-        sudo -u azureuser ln -s /tmp/ "$LINK"
-        echo "$TAG repointed $LINK -> /tmp/ (was: $current)"
-    fi
-elif [ -e "$LINK" ]; then
-    echo "$TAG WARNING: $LINK exists and is not a symlink; leaving it alone"
+# 2. Swap symlink -> bind mount for /tmp passthrough.
+if [ -L "$TMP_BIND" ]; then
+    rm -f "$TMP_BIND"
+    echo "$TAG removed legacy symlink at $TMP_BIND"
+fi
+if [ -d "$TMP_BIND" ] && ! mountpoint -q "$TMP_BIND"; then
+    # Only rmdir if empty; don't clobber user data.
+    rmdir "$TMP_BIND" 2>/dev/null || echo "$TAG WARNING: $TMP_BIND is non-empty; leaving contents in place"
+fi
+if [ ! -d "$TMP_BIND" ]; then
+    mkdir -p "$TMP_BIND"
+    chown azureuser:azureuser "$TMP_BIND"
+fi
+if ! mountpoint -q "$TMP_BIND"; then
+    mount --bind /tmp "$TMP_BIND"
+    echo "$TAG bind-mounted /tmp at $TMP_BIND"
 else
-    sudo -u azureuser ln -s /tmp/ "$LINK"
-    echo "$TAG created $LINK -> /tmp/"
+    echo "$TAG $TMP_BIND already bind-mounted"
 fi
 
-# Ensure /tmp/openclaw exists with the perms the resolver wants (0700, owned by
-# azureuser). The gateway normally creates this at startup, but seeding it here
-# avoids a first-attachment race and documents the expectation in one place.
-TMPDIR="/tmp/openclaw"
-if [ ! -d "$TMPDIR" ]; then
-    install -d -m 0700 -o azureuser -g azureuser "$TMPDIR"
-    echo "$TAG created $TMPDIR (0700 azureuser)"
-else
-    chmod 0700 "$TMPDIR"
-    chown azureuser:azureuser "$TMPDIR"
+# 3. Persist in fstab so reboots replay automatically.
+if ! grep -qE "^/tmp[[:space:]]+$TMP_BIND[[:space:]]" /etc/fstab 2>/dev/null; then
+    echo "/tmp $TMP_BIND none bind 0 0" >> /etc/fstab
+    echo "$TAG added fstab entry for $TMP_BIND"
+fi
+
+# 4. Ensure /tmp/openclaw (preferred tmp dir) exists with correct perms.
+if [ ! -d /tmp/openclaw ]; then
+    install -d -m 0700 -o azureuser -g azureuser /tmp/openclaw
+    echo "$TAG created /tmp/openclaw (0700 azureuser)"
 fi

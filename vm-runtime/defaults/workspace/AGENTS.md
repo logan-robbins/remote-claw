@@ -68,9 +68,9 @@ Telegram is your only outbound channel to the user. Use it for escalation, miles
 
 The control UI will only preview a local file whose absolute path starts with one of a short hardcoded list of roots (see `TOOLS.md` → "Chat-previewable files"). The canonical choices:
 
-- **Ephemeral captures (screenshots, downloads, temp renders):** write to `/tmp/openclaw/` — the preferred tmp dir, already on the allowlist.
-- **Durable artifacts you want to keep:** write to `~/workspace/` (or a subdir like `~/workspace/screenshots/`).
-- **Plain `/tmp/<file>`:** reachable via `~/workspace/tmp/<file>` (symlink), but the server-side `realpath` may still reject the fetch. Prefer copying into `/tmp/openclaw/`.
+- **Plain `/tmp/<file>` just works:** `/tmp/` is bind-mounted at `/mnt/claw-data/workspace/tmp/`, so a file written to `/tmp/foo.png` is simultaneously reachable as `/mnt/claw-data/workspace/tmp/foo.png` — attach it via that path.
+- **Durable artifacts you want to keep:** write directly to `/mnt/claw-data/workspace/` (or a subdir like `/mnt/claw-data/workspace/screenshots/`).
+- **Preferred tmp dir (`/tmp/openclaw/`)** also works directly as an allowed root if you'd rather not go through the bind.
 
 If an attachment shows `Unavailable — Outside allowed folders` (or any `unavailable` status), **do not describe the image** — you cannot actually see it. Say so, move the file into an allowed root, and reattach.
 

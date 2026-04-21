@@ -12,7 +12,7 @@ This file documents what is specific to this claw VM. Skills define how tools wo
 
 - `~/workspace` → `/mnt/claw-data/workspace` (this directory, persists on data disk)
 - `~/.openclaw` → `/mnt/claw-data/openclaw` (config, secrets, skills)
-- `~/workspace/tmp` → `/tmp/` (symlink so `/tmp/*` is reachable from an allowed media root)
+- `/mnt/claw-data/workspace/tmp/` — bind mount of `/tmp/` (any file at `/tmp/foo` is simultaneously reachable at `/mnt/claw-data/workspace/tmp/foo`, which IS an allowed preview path). Bind mount, not symlink, so the server's `realpath()` check also passes.
 
 ## Chat-previewable files (allowed media roots)
 
@@ -25,7 +25,7 @@ The control UI will only preview a local file whose absolute path starts with on
 5. `/mnt/claw-data/workspace/` (= `~/workspace/`) — this directory. Use for durable, version-controllable artifacts.
 6. `<configDir>/media/` — rarely relevant on this VM.
 
-There is no config knob to extend this list (GitHub issue openclaw#22237, closed "not planned"). If a tool writes to plain `/tmp/<name>.png`, move it into `/tmp/openclaw/` or reference it via `~/workspace/tmp/<name>.png` (the symlink exposes `/tmp/` under an allowed root — note the server-side `realpath` may still reject the final fetch, in which case copy rather than symlink).
+There is no config knob to extend this list (GitHub issue openclaw#22237, closed "not planned"). But because `/tmp/` is bind-mounted at `/mnt/claw-data/workspace/tmp/`, any file written anywhere in `/tmp/<name>.png` can be attached as `/mnt/claw-data/workspace/tmp/<name>.png` — same bytes, allowed path, no copy needed.
 
 **When an attachment renders `unavailable`:** do not describe the image. State that the preview failed, move or copy the file into `/tmp/openclaw/` or `~/workspace/`, and reattach.
 

@@ -258,6 +258,34 @@ setup_symlinks() {
     log "Symlinks and .xsession created"
 }
 
+setup_tmp_passthrough() {
+    # Bind /tmp onto a subdirectory of the workspace so files written anywhere
+    # in /tmp are simultaneously addressable via an allowed OpenClaw media root
+    # (/mnt/claw-data/workspace/*). Required because the control UI only
+    # previews local files whose literal path starts with a hardcoded root.
+    # Bind mount -- not symlink -- because the server does realpath() before
+    # serving media, and bind mounts don't dereference.
+    local dst="${DATA_MOUNT}/workspace/tmp"
+    # Replace a stale symlink or empty dir safely; never clobber a non-empty
+    # directory that a user might have placed there.
+    if [[ -L "$dst" ]]; then
+        rm -f "$dst"
+    elif [[ -d "$dst" ]] && ! mountpoint -q "$dst" 2>/dev/null; then
+        rmdir "$dst" 2>/dev/null || log "WARNING: ${dst} exists and is non-empty; leaving alone"
+    fi
+    if [[ ! -d "$dst" ]]; then
+        mkdir -p "$dst"
+        chown "${ADMIN_USER}:${ADMIN_USER}" "$dst"
+    fi
+    if ! mountpoint -q "$dst" 2>/dev/null; then
+        mount --bind /tmp "$dst"
+        log "Bind-mounted /tmp at ${dst}"
+    fi
+    if ! grep -qE "^/tmp[[:space:]]+${dst}[[:space:]]" /etc/fstab 2>/dev/null; then
+        echo "/tmp $dst none bind 0 0" >> /etc/fstab
+    fi
+}
+
 fix_permissions() {
     chown -R "${ADMIN_USER}:${ADMIN_USER}" "${DATA_MOUNT}"
     chown -h "${ADMIN_USER}:${ADMIN_USER}" \
@@ -357,6 +385,7 @@ log "=== Boot script starting ==="
 mount_data_disk
 seed_new_disk
 setup_symlinks
+setup_tmp_passthrough
 fix_permissions
 sync_vnc_password
 setup_tailscale
