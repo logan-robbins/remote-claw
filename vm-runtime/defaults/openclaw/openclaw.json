@@ -5,15 +5,24 @@
         "primary": "anthropic/claude-sonnet-4-6"
       },
       "workspace": "/mnt/claw-data/workspace",
-      "maxConcurrent": 32,
       "sandbox": {
         "mode": "off"
       },
       "elevatedDefault": "full",
-      "thinkingDefault": "high",
-      "skills": [
-        "/mnt/claw-data/workspace/skills"
-      ],
+      "maxConcurrent": 32,
+      "subagents": {
+        "maxConcurrent": 32,
+        "allowAgents": [
+          "*"
+        ],
+        "maxSpawnDepth": 5,
+        "maxChildrenPerAgent": 20,
+        "runTimeoutSeconds": 0,
+        "requireAgentId": false,
+        "model": "anthropic/claude-haiku-4-5",
+        "thinking": "high"
+      },
+      "skipBootstrap": false,
       "contextPruning": {
         "mode": "cache-ttl",
         "ttl": "1h"
@@ -21,25 +30,62 @@
       "heartbeat": {
         "every": "30m"
       },
-      "subagents": {
-        "allowAgents": ["*"],
-        "maxSpawnDepth": 5,
-        "maxChildrenPerAgent": 20,
-        "maxConcurrent": 32,
-        "runTimeoutSeconds": 0,
-        "requireAgentId": false
-      },
       "models": {
-        "anthropic/claude-opus-4-6": {
+        "anthropic/claude-sonnet-4-6": {
           "params": {
             "cacheRetention": "short"
           },
-          "alias": "opus"
+          "alias": "sonnet"
+        },
+        "openai/gpt-5.4": {
+          "alias": "gpt-5.4"
+        },
+        "openai/gpt-5.4-mini": {
+          "alias": "gpt-5.4-mini"
+        },
+        "openai/gpt-5.4-nano": {
+          "alias": "gpt-5.4-nano"
+        },
+        "openai/gpt-5.2-codex": {
+          "alias": "codex"
+        },
+        "openai/o1": {
+          "alias": "o1"
+        },
+        "moonshot/kimi-k2-thinking": {
+          "alias": "kimi-thinking"
+        },
+        "deepseek/deepseek-chat": {
+          "alias": "deepseek"
+        },
+        "deepseek/deepseek-reasoner": {
+          "alias": "deepseek-r1"
+        },
+        "anthropic/claude-opus-4-7": {
+          "alias": "opus",
+          "params": {
+            "cacheRetention": "short"
+          }
+        },
+        "anthropic/claude-haiku-4-5": {
+          "alias": "haiku"
+        },
+        "moonshot/kimi-k2.6": {
+          "alias": "kimi"
+        },
+        "xai/grok-4.20": {
+          "alias": "grok"
+        },
+        "xai/grok-4.20-0309-reasoning": {
+          "alias": "grok-reasoning"
         }
       },
       "compaction": {
         "mode": "safeguard"
-      }
+      },
+      "skills": [
+        "/mnt/claw-data/workspace/skills"
+      ]
     },
     "list": [
       {
@@ -48,105 +94,69 @@
       }
     ]
   },
-  "models": {
-    "mode": "merge",
-    "providers": {
-      "xai": {
-        "baseUrl": "https://api.x.ai/v1",
-        "api": "openai-completions",
-        "models": [
-          {
-            "id": "grok-4",
-            "name": "Grok 4",
-            "reasoning": false,
-            "input": ["text"],
-            "contextWindow": 200000,
-            "maxTokens": 8192
-          }
-        ]
-      },
-      "anthropic": {
-        "baseUrl": "https://api.anthropic.com",
-        "api": "anthropic-messages",
-        "models": [
-          {
-            "id": "claude-opus-4-6",
-            "name": "Claude Opus 4.6",
-            "reasoning": true,
-            "input": ["text", "image"],
-            "contextWindow": 1000000,
-            "maxTokens": 32000
-          },
-          {
-            "id": "claude-sonnet-4-6",
-            "name": "Claude Sonnet 4.6",
-            "reasoning": true,
-            "input": ["text", "image"],
-            "contextWindow": 1000000,
-            "maxTokens": 32000
-          }
-        ]
-      }
-    }
-  },
-  "channels": {
-    "telegram": {
-      "enabled": true,
-      "dmPolicy": "open",
-      "allowFrom": ["*"],
-      "groupPolicy": "open",
-      "streaming": {
-        "mode": "partial"
-      }
-    }
-  },
   "gateway": {
     "port": 18789,
-    "mode": "local",
     "bind": "loopback",
+    "mode": "local",
     "auth": {
-      "mode": "none"
-    },
-    "tailscale": {
-      "mode": "serve"
+      "mode": "token"
     },
     "controlUi": {
       "allowInsecureAuth": true,
       "dangerouslyDisableDeviceAuth": true,
       "dangerouslyAllowHostHeaderOriginFallback": true,
-      "allowedOrigins": ["*"]
+      "allowedOrigins": [
+        "*"
+      ]
+    },
+    "tailscale": {
+      "mode": "serve"
     }
   },
   "tools": {
-    "profile": "full",
-    "fs": {
-      "workspaceOnly": false
-    },
     "exec": {
       "security": "full",
       "ask": "off",
-      "host": "gateway",
-      "backgroundMs": 10000,
       "timeoutSec": 1800,
+      "backgroundMs": 10000,
+      "host": "gateway",
       "applyPatch": {
         "workspaceOnly": false
       }
     },
+    "fs": {
+      "workspaceOnly": false
+    },
     "elevated": {
       "enabled": true,
       "allowFrom": {
-        "*": ["*"]
+        "*": [
+          "*"
+        ]
       }
     },
-    "sessions": {
-      "visibility": "all"
-    },
+    "profile": "full",
     "web": {
       "search": {
         "enabled": true
       },
       "fetch": {
         "enabled": true
+      }
+    },
+    "sessions": {
+      "visibility": "all"
+    },
+    "allow": [
+      "*"
+    ],
+    "deny": [],
+    "subagents": {
+      "tools": {
+        "allow": [
+          "*"
+        ],
+        "deny": []
       }
     },
     "loopDetection": {
@@ -160,6 +170,11 @@
         "knownPollNoProgress": true,
         "pingPong": true
       }
+    },
+    "sandbox": {
+      "tools": {
+        "deny": []
+      }
     }
   },
   "browser": {
@@ -171,41 +186,257 @@
       "dangerouslyAllowPrivateNetwork": true
     }
   },
-  "logging": {
-    "redactSensitive": "off"
-  },
-  "commands": {
-    "useAccessGroups": false
+  "channels": {
+    "telegram": {
+      "enabled": true,
+      "dmPolicy": "open",
+      "groupPolicy": "open",
+      "allowFrom": [
+        "*"
+      ],
+      "streaming": {
+        "mode": "partial"
+      }
+    }
   },
   "plugins": {
     "entries": {
-      "xai": {
+      "anthropic": {
         "enabled": true
       },
       "browser": {
         "enabled": true
       },
-      "telegram": {
-        "enabled": true
-      },
-      "anthropic": {
-        "enabled": true
+      "acpx": {
+        "enabled": true,
+        "config": {
+          "permissionMode": "approve-all",
+          "timeoutSeconds": 3600
+        }
       },
       "lossless-claw": {
         "enabled": true
       },
-      "acpx": {
-        "enabled": true,
-        "config": {
-          "permissionMode": "approve-all"
-        }
+      "xai": {
+        "enabled": true
+      },
+      "openai": {
+        "enabled": true
+      },
+      "moonshot": {
+        "enabled": true
+      },
+      "deepseek": {
+        "enabled": true
       }
     },
-    "allow": [
-      "lossless-claw"
-    ],
     "slots": {
       "contextEngine": "lossless-claw"
+    }
+  },
+  "logging": {
+    "redactSensitive": "off"
+  },
+  "models": {
+    "mode": "merge",
+    "providers": {
+      "xai": {
+        "baseUrl": "https://api.x.ai/v1",
+        "api": "openai-completions",
+        "apiKey": "$XAI_API_KEY",
+        "models": [
+          {
+            "id": "grok-4.20",
+            "name": "Grok 4.20",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 200000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "grok-4.20-0309-reasoning",
+            "name": "Grok 4.20 Reasoning",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 200000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "grok-4",
+            "name": "Grok 4",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 200000,
+            "maxTokens": 8192
+          }
+        ]
+      },
+      "openai": {
+        "baseUrl": "https://api.openai.com/v1",
+        "api": "openai-completions",
+        "apiKey": "$OPENAI_API_KEY",
+        "models": [
+          {
+            "id": "gpt-5.4",
+            "name": "GPT-5.4",
+            "reasoning": false,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 1050000,
+            "maxTokens": 128000
+          },
+          {
+            "id": "gpt-5.4-mini",
+            "name": "GPT-5.4 Mini",
+            "reasoning": false,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 400000,
+            "maxTokens": 128000
+          },
+          {
+            "id": "gpt-5.4-nano",
+            "name": "GPT-5.4 Nano",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 400000,
+            "maxTokens": 128000
+          },
+          {
+            "id": "gpt-5.2-codex",
+            "name": "GPT-5.2 Codex",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 400000,
+            "maxTokens": 128000
+          },
+          {
+            "id": "o1",
+            "name": "o1",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 200000,
+            "maxTokens": 100000
+          }
+        ]
+      },
+      "moonshot": {
+        "baseUrl": "https://api.moonshot.ai/v1",
+        "api": "openai-completions",
+        "apiKey": "$MOONSHOT_API_KEY",
+        "models": [
+          {
+            "id": "kimi-k2.6",
+            "name": "Kimi K2.6",
+            "reasoning": false,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 262144,
+            "maxTokens": 262144,
+            "compat": {
+              "supportsUsageInStreaming": true
+            }
+          },
+          {
+            "id": "kimi-k2-thinking",
+            "name": "Kimi K2 Thinking",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 262144,
+            "maxTokens": 262144,
+            "compat": {
+              "supportsUsageInStreaming": true
+            }
+          }
+        ]
+      },
+      "deepseek": {
+        "baseUrl": "https://api.deepseek.com",
+        "api": "openai-completions",
+        "apiKey": "$DEEPSEEK_API_KEY",
+        "models": [
+          {
+            "id": "deepseek-chat",
+            "name": "DeepSeek Chat (V3)",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+          {
+            "id": "deepseek-reasoner",
+            "name": "DeepSeek Reasoner (R1)",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 131072,
+            "maxTokens": 65536
+          }
+        ]
+      },
+      "anthropic": {
+        "baseUrl": "https://api.anthropic.com",
+        "api": "anthropic-messages",
+        "models": [
+          {
+            "id": "claude-opus-4-7",
+            "name": "Claude Opus 4.7",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 1000000,
+            "maxTokens": 32000
+          },
+          {
+            "id": "claude-sonnet-4-6",
+            "name": "Claude Sonnet 4.6",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 1000000,
+            "maxTokens": 32000
+          },
+          {
+            "id": "claude-haiku-4-5",
+            "name": "Claude Haiku 4.5",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 200000,
+            "maxTokens": 16000
+          }
+        ]
+      }
     }
   }
 }

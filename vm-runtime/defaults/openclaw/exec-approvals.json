@@ -1,20 +1,8 @@
 {
   "version": 1,
-  "defaults": {
-    "security": "full",
-    "ask": "off",
-    "askFallback": "full"
+  "socket": {
+    "path": "/home/azureuser/.openclaw/exec-approvals.sock"
   },
-  "agents": {
-    "main": {
-      "security": "full",
-      "ask": "off",
-      "askFallback": "full",
-      "allowlist": [
-        {
-          "pattern": "**"
-        }
-      ]
-    }
-  }
+  "defaults": {},
+  "agents": {}
 }

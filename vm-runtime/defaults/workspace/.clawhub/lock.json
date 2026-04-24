@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "skills": {
+    "mcporter": {
+      "version": "1.0.0",
+      "installedAt": 1776537282956
+    },
+    "github": {
+      "version": "1.0.0",
+      "installedAt": 1776537284636
+    },
+    "tmux": {
+      "version": "1.0.0",
+      "installedAt": 1776537288721
+    },
+    "model-usage": {
+      "version": "1.0.0",
+      "installedAt": 1776537290818
+    },
+    "gog": {
+      "version": "1.0.0",
+      "installedAt": 1776537292598
+    },
+    "caldav-calendar": {
+      "version": "1.0.1",
+      "installedAt": 1776537294585
+    },
+    "self-improving-agent": {
+      "version": "3.0.16",
+      "installedAt": 1776537298340
+    },
+    "jx76-gog": {
+      "version": "1.0.1",
+      "installedAt": 1776977945037
+    }
+  }
+}

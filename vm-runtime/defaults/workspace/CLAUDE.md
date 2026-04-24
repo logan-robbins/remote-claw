@@ -162,6 +162,7 @@ cd ~/workspace && npx clawhub install <slug>
 - **Gmail/gog broken after VM upgrade**: re-run the OAuth flow per `docs/GMAIL.md` in the openclaups repo
 - **Data disk not mounted**: check `/var/log/claw-boot.log` — boot.sh has a 60s retry loop for disk attachment
 - **Config broken (bad JSON)**: `python3 -m json.tool ~/.openclaw/openclaw.json` to validate before restarting
+- **"This model does not support assistant message prefill" on every message**: Two causes work together. (1) `thinkingDefault: "high"` with `claude-sonnet-4-6` triggers an API pathway the model rejects — fix by setting `thinkingDefault: "adaptive"` in `openclaw.json`. (2) Each rejection writes an empty `role=assistant, content=[]` entry to the JSONL session file, perpetuating the loop — stop gateway, remove those entries, reset LCM bootstrap state (`UPDATE conversation_bootstrap_state SET last_seen_size=0, last_seen_mtime_ms=0, last_processed_offset=0, last_processed_entry_hash=NULL WHERE conversation_id=N`), restart. See memory `openclaw_prefill_loop_fix.md`. Upstream: openclaw/openclaw#58567.
 
 ## Git repo
 

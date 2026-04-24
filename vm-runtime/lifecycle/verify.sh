@@ -98,8 +98,10 @@ else
 fi
 if lsmod 2>/dev/null | grep -q '^amdgpu'; then
     pass "amdgpu kernel module loaded"
+elif lsmod 2>/dev/null | grep -Eq '^(amddrm_ttm_helper|amdttm|amddrm_buddy|amddrm_exec|amdkcl|hyperv_drm)\b'; then
+    warn "amdgpu not present, but AMD/Hyper-V graphics helper modules are loaded"
 else
-    fail "amdgpu kernel module not loaded"
+    warn "no AMD-specific kernel modules detected"
 fi
 if command -v amd-smi >/dev/null 2>&1; then
     if amd-smi monitor -p 2>/dev/null | head -n1 | grep -qi 'gpu\|power'; then
@@ -123,20 +125,31 @@ for svc in lightdm xrdp sunshine; do
     fi
 done
 
-echo "Services (agent display):"
-for svc in openclaw-xvfb openclaw-wm openclaw-gateway; do
-    state=$(systemctl is-active "$svc" 2>/dev/null)
-    if [[ "$state" == "active" || "$state" == "activating" ]]; then
-        pass "$svc is $state"
+echo "Services (agent runtime):"
+state=$(systemctl is-active openclaw-gateway 2>/dev/null)
+if [[ "$state" == "active" || "$state" == "activating" ]]; then
+    pass "openclaw-gateway is $state"
+else
+    fail "openclaw-gateway is $state"
+fi
+
+for svc in openclaw-xvfb openclaw-wm openclaw-observe; do
+    state=$(systemctl is-active "$svc" 2>/dev/null || true)
+    if [[ "$state" == "inactive" || "$state" == "unknown" || "$state" == "failed" ]]; then
+        pass "$svc retired/not running"
     else
-        fail "$svc is $state"
+        warn "$svc unexpectedly $state"
     fi
 done
 
 # -- Display --------------------------------------------------------------------
 echo "Displays:"
 check "X11 socket /tmp/.X11-unix/X0 exists (human :0)" test -S /tmp/.X11-unix/X0
-check "X11 socket /tmp/.X11-unix/X99 exists (agent :99)" test -S /tmp/.X11-unix/X99
+if [[ -S /tmp/.X11-unix/X99 ]]; then
+    warn "X11 socket /tmp/.X11-unix/X99 exists (legacy agent display)"
+else
+    pass "No dedicated :99 display present (agent shares :0)"
+fi
 
 # -- Remote desktop ports -------------------------------------------------------
 echo "Remote-desktop ports:"
